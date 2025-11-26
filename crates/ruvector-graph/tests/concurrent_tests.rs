@@ -2,7 +2,7 @@
 //!
 //! Tests for multi-threaded access, lock-free operations, and concurrent modifications.
 
-use ruvector_graph::{GraphDB, Node, Edge, Label, RelationType, Properties, PropertyValue};
+use ruvector_graph::{GraphDB, Node, Edge, Label, Properties, PropertyValue};
 use std::sync::Arc;
 use std::thread;
 
@@ -129,7 +129,7 @@ fn test_concurrent_edge_creation() {
                         format!("e_{}_{}", thread_id, i),
                         from,
                         to,
-                        RelationType { name: "LINK".to_string() },
+                        "LINK".to_string(),
                         Properties::new(),
                     );
 
@@ -194,38 +194,6 @@ fn test_concurrent_read_while_writing() {
         handle.join().unwrap();
     }
 }
-
-// TODO: Implement delete operations
-// #[test]
-// fn test_concurrent_delete() {
-//     let db = Arc::new(GraphDB::new());
-//
-//     // Create nodes
-//     for i in 0..100 {
-//         db.create_node(Node::new(format!("node_{}", i), vec![], Properties::new())).unwrap();
-//     }
-//
-//     let num_threads = 10;
-//
-//     let handles: Vec<_> = (0..num_threads)
-//         .map(|thread_id| {
-//             let db_clone = Arc::clone(&db);
-//             thread::spawn(move || {
-//                 for i in 0..10 {
-//                     let node_id = format!("node_{}", thread_id * 10 + i);
-//                     db_clone.delete_node(&node_id).unwrap();
-//                 }
-//             })
-//         })
-//         .collect();
-//
-//     for handle in handles {
-//         handle.join().unwrap();
-//     }
-//
-//     // All 100 nodes should be deleted
-//     assert_eq!(db.node_count(), 0);
-// }
 
 #[test]
 fn test_concurrent_property_updates() {
@@ -303,49 +271,6 @@ fn test_lock_free_reads() {
 }
 
 #[test]
-fn test_concurrent_hyperedge_creation() {
-    // TODO: Implement after hyperedge support is added to GraphDB
-
-    /*
-    let db = Arc::new(GraphDB::new());
-
-    // Create nodes
-    for i in 0..100 {
-        db.create_node(Node::new(format!("n{}", i), vec![], Properties::new())).unwrap();
-    }
-
-    let num_threads = 10;
-
-    let handles: Vec<_> = (0..num_threads)
-        .map(|thread_id| {
-            let db_clone = Arc::clone(&db);
-            thread::spawn(move || {
-                for i in 0..20 {
-                    let nodes = vec![
-                        format!("n{}", (thread_id * 10 + i) % 100),
-                        format!("n{}", (thread_id * 10 + i + 1) % 100),
-                        format!("n{}", (thread_id * 10 + i + 2) % 100),
-                    ];
-
-                    let hyperedge = Hyperedge::new(
-                        format!("h_{}_{}", thread_id, i),
-                        nodes,
-                        "MEETING".to_string(),
-                    );
-
-                    db_clone.create_hyperedge(hyperedge).unwrap();
-                }
-            })
-        })
-        .collect();
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-    */
-}
-
-#[test]
 fn test_writer_starvation_prevention() {
     // Ensure that heavy read load doesn't prevent writes
 
@@ -366,11 +291,11 @@ fn test_writer_starvation_prevention() {
     let mut handles = vec![];
 
     // Heavy read load
-    for reader_id in 0..20 {
+    for reader_id in 0..20i64 {
         let db_clone = Arc::clone(&db);
         let done = Arc::clone(&readers_done);
         let handle = thread::spawn(move || {
-            for i in 0..1000 {
+            for i in 0..1000i64 {
                 let node_id = format!("initial_{}", (reader_id + i) % 100);
                 let _ = db_clone.get_node(&node_id);
             }
@@ -420,7 +345,7 @@ fn test_high_concurrency_stress() {
             let db_clone = Arc::clone(&db);
             thread::spawn(move || {
                 // Mix of operations
-                for i in 0..100 {
+                for i in 0i32..100 {
                     if i % 3 == 0 {
                         // Create node
                         let node = Node::new(

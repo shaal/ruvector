@@ -29,8 +29,8 @@ pub mod distributed;
 // Core type re-exports
 pub use error::{GraphError, Result};
 pub use types::{NodeId, EdgeId, PropertyValue, Properties, Label, RelationType};
-pub use node::Node;
-pub use edge::Edge;
+pub use node::{Node, NodeBuilder};
+pub use edge::{Edge, EdgeBuilder};
 pub use hyperedge::{Hyperedge, HyperedgeBuilder, HyperedgeId};
 pub use graph::GraphDB;
 pub use storage::GraphStorage;

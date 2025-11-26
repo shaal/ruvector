@@ -2,7 +2,7 @@
 //!
 //! Tests to verify that Cypher queries execute correctly and return expected results.
 
-use ruvector_graph::{GraphDB, Node, Edge, Label, RelationType, Properties, PropertyValue};
+use ruvector_graph::{GraphDB, Node, Edge, Label, Properties, PropertyValue};
 
 fn setup_test_graph() -> GraphDB {
     let db = GraphDB::new();
@@ -43,7 +43,7 @@ fn setup_test_graph() -> GraphDB {
         "e1".to_string(),
         "alice".to_string(),
         "bob".to_string(),
-        RelationType { name: "KNOWS".to_string() },
+        "KNOWS".to_string(),
         Properties::new(),
     )).unwrap();
 
@@ -51,7 +51,7 @@ fn setup_test_graph() -> GraphDB {
         "e2".to_string(),
         "bob".to_string(),
         "charlie".to_string(),
-        RelationType { name: "KNOWS".to_string() },
+        "KNOWS".to_string(),
         Properties::new(),
     )).unwrap();
 
@@ -261,10 +261,10 @@ fn test_execute_path_query() {
     let e1 = db.get_edge("e1").unwrap();
     let e2 = db.get_edge("e2").unwrap();
 
-    assert_eq!(e1.from_node, "alice");
-    assert_eq!(e1.to_node, "bob");
-    assert_eq!(e2.from_node, "bob");
-    assert_eq!(e2.to_node, "charlie");
+    assert_eq!(e1.from, "alice");
+    assert_eq!(e1.to, "bob");
+    assert_eq!(e2.from, "bob");
+    assert_eq!(e2.to, "charlie");
 }
 
 // ============================================================================

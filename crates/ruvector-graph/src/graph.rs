@@ -116,20 +116,20 @@ impl GraphDB {
     }
 
     /// Get a node by ID
-    pub fn get_node(&self, id: &NodeId) -> Option<Node> {
-        self.nodes.get(id).map(|entry| entry.clone())
+    pub fn get_node(&self, id: impl AsRef<str>) -> Option<Node> {
+        self.nodes.get(id.as_ref()).map(|entry| entry.clone())
     }
 
     /// Delete a node
-    pub fn delete_node(&self, id: &NodeId) -> Result<bool> {
-        if let Some((_, node)) = self.nodes.remove(id) {
+    pub fn delete_node(&self, id: impl AsRef<str>) -> Result<bool> {
+        if let Some((_, node)) = self.nodes.remove(id.as_ref()) {
             // Update indexes
             self.label_index.remove_node(&node);
             self.property_index.remove_node(&node);
 
             // Delete from storage if available
             if let Some(storage) = &self.storage {
-                storage.delete_node(id)?;
+                storage.delete_node(id.as_ref())?;
             }
 
             Ok(true)
@@ -185,20 +185,20 @@ impl GraphDB {
     }
 
     /// Get an edge by ID
-    pub fn get_edge(&self, id: &EdgeId) -> Option<Edge> {
-        self.edges.get(id).map(|entry| entry.clone())
+    pub fn get_edge(&self, id: impl AsRef<str>) -> Option<Edge> {
+        self.edges.get(id.as_ref()).map(|entry| entry.clone())
     }
 
     /// Delete an edge
-    pub fn delete_edge(&self, id: &EdgeId) -> Result<bool> {
-        if let Some((_, edge)) = self.edges.remove(id) {
+    pub fn delete_edge(&self, id: impl AsRef<str>) -> Result<bool> {
+        if let Some((_, edge)) = self.edges.remove(id.as_ref()) {
             // Update indexes
             self.edge_type_index.remove_edge(&edge);
             self.adjacency_index.remove_edge(&edge);
 
             // Delete from storage if available
             if let Some(storage) = &self.storage {
-                storage.delete_edge(id)?;
+                storage.delete_edge(id.as_ref())?;
             }
 
             Ok(true)

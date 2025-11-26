@@ -2,7 +2,7 @@
 //!
 //! Tests for creating edges, querying relationships, and graph traversals.
 
-use ruvector_graph::{GraphDB, Node, Edge, Label, RelationType, Properties, PropertyValue};
+use ruvector_graph::{GraphDB, Node, Edge, EdgeBuilder, Label, Properties, PropertyValue};
 
 #[test]
 fn test_create_edge_basic() {
@@ -28,7 +28,7 @@ fn test_create_edge_basic() {
         "edge1".to_string(),
         "person1".to_string(),
         "person2".to_string(),
-        RelationType { name: "KNOWS".to_string() },
+        "KNOWS".to_string(),
         Properties::new(),
     );
 
@@ -54,7 +54,7 @@ fn test_get_edge_existing() {
         "e1".to_string(),
         "n1".to_string(),
         "n2".to_string(),
-        RelationType { name: "FRIEND_OF".to_string() },
+        "FRIEND_OF".to_string(),
         properties,
     );
 
@@ -62,9 +62,9 @@ fn test_get_edge_existing() {
 
     let retrieved = db.get_edge("e1").unwrap();
     assert_eq!(retrieved.id, "e1");
-    assert_eq!(retrieved.from_node, "n1");
-    assert_eq!(retrieved.to_node, "n2");
-    assert_eq!(retrieved.rel_type.name, "FRIEND_OF");
+    assert_eq!(retrieved.from, "n1");
+    assert_eq!(retrieved.to, "n2");
+    assert_eq!(retrieved.edge_type, "FRIEND_OF");
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn test_edge_with_properties() {
         "weighted_edge".to_string(),
         "a".to_string(),
         "b".to_string(),
-        RelationType { name: "CONNECTED_TO".to_string() },
+        "CONNECTED_TO".to_string(),
         properties,
     );
 
@@ -107,7 +107,7 @@ fn test_bidirectional_edges() {
         "e1".to_string(),
         "alice".to_string(),
         "bob".to_string(),
-        RelationType { name: "FOLLOWS".to_string() },
+        "FOLLOWS".to_string(),
         Properties::new(),
     );
 
@@ -116,7 +116,7 @@ fn test_bidirectional_edges() {
         "e2".to_string(),
         "bob".to_string(),
         "alice".to_string(),
-        RelationType { name: "FOLLOWS".to_string() },
+        "FOLLOWS".to_string(),
         Properties::new(),
     );
 
@@ -126,10 +126,10 @@ fn test_bidirectional_edges() {
     let e1 = db.get_edge("e1").unwrap();
     let e2 = db.get_edge("e2").unwrap();
 
-    assert_eq!(e1.from_node, "alice");
-    assert_eq!(e1.to_node, "bob");
-    assert_eq!(e2.from_node, "bob");
-    assert_eq!(e2.to_node, "alice");
+    assert_eq!(e1.from, "alice");
+    assert_eq!(e1.to, "bob");
+    assert_eq!(e2.from, "bob");
+    assert_eq!(e2.to, "alice");
 }
 
 #[test]
@@ -142,14 +142,14 @@ fn test_self_loop_edge() {
         "self_loop".to_string(),
         "node".to_string(),
         "node".to_string(),
-        RelationType { name: "REFERENCES".to_string() },
+        "REFERENCES".to_string(),
         Properties::new(),
     );
 
     db.create_edge(edge).unwrap();
 
     let retrieved = db.get_edge("self_loop").unwrap();
-    assert_eq!(retrieved.from_node, retrieved.to_node);
+    assert_eq!(retrieved.from, retrieved.to);
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn test_multiple_edges_same_nodes() {
         "e1".to_string(),
         "x".to_string(),
         "y".to_string(),
-        RelationType { name: "WORKS_WITH".to_string() },
+        "WORKS_WITH".to_string(),
         Properties::new(),
     );
 
@@ -172,7 +172,7 @@ fn test_multiple_edges_same_nodes() {
         "e2".to_string(),
         "x".to_string(),
         "y".to_string(),
-        RelationType { name: "FRIENDS_WITH".to_string() },
+        "FRIENDS_WITH".to_string(),
         Properties::new(),
     );
 
@@ -198,7 +198,7 @@ fn test_edge_timestamp_property() {
         "interaction".to_string(),
         "user1".to_string(),
         "post1".to_string(),
-        RelationType { name: "INTERACTED".to_string() },
+        "INTERACTED".to_string(),
         properties,
     );
 
@@ -214,56 +214,6 @@ fn test_get_nonexistent_edge() {
     let result = db.get_edge("does_not_exist");
     assert!(result.is_none());
 }
-
-// TODO: Implement graph traversal methods
-// #[test]
-// fn test_get_outgoing_edges() {
-//     let db = GraphDB::new();
-//
-//     db.create_node(Node::new("central".to_string(), vec![], Properties::new())).unwrap();
-//     db.create_node(Node::new("out1".to_string(), vec![], Properties::new())).unwrap();
-//     db.create_node(Node::new("out2".to_string(), vec![], Properties::new())).unwrap();
-//
-//     db.create_edge(Edge::new(
-//         "e1".to_string(),
-//         "central".to_string(),
-//         "out1".to_string(),
-//         RelationType { name: "POINTS_TO".to_string() },
-//         Properties::new(),
-//     )).unwrap();
-//
-//     db.create_edge(Edge::new(
-//         "e2".to_string(),
-//         "central".to_string(),
-//         "out2".to_string(),
-//         RelationType { name: "POINTS_TO".to_string() },
-//         Properties::new(),
-//     )).unwrap();
-//
-//     let outgoing = db.get_outgoing_edges("central").unwrap();
-//     assert_eq!(outgoing.len(), 2);
-// }
-
-// TODO: Implement graph traversal methods
-// #[test]
-// fn test_shortest_path() {
-//     let db = GraphDB::new();
-//
-//     // Create a simple graph: A -> B -> C -> D
-//     for id in &["a", "b", "c", "d"] {
-//         db.create_node(Node::new(id.to_string(), vec![], Properties::new())).unwrap();
-//     }
-//
-//     db.create_edge(Edge::new("e1".to_string(), "a".to_string(), "b".to_string(),
-//         RelationType { name: "NEXT".to_string() }, Properties::new())).unwrap();
-//     db.create_edge(Edge::new("e2".to_string(), "b".to_string(), "c".to_string(),
-//         RelationType { name: "NEXT".to_string() }, Properties::new())).unwrap();
-//     db.create_edge(Edge::new("e3".to_string(), "c".to_string(), "d".to_string(),
-//         RelationType { name: "NEXT".to_string() }, Properties::new())).unwrap();
-//
-//     let path = db.shortest_path("a", "d").unwrap();
-//     assert_eq!(path.len(), 3); // 3 edges
-// }
 
 #[test]
 fn test_create_many_edges() {
@@ -281,7 +231,7 @@ fn test_create_many_edges() {
             format!("edge_{}", i),
             "hub".to_string(),
             node_id,
-            RelationType { name: "CONNECTS".to_string() },
+            "CONNECTS".to_string(),
             Properties::new(),
         );
 
@@ -292,6 +242,28 @@ fn test_create_many_edges() {
     for i in 0..100 {
         assert!(db.get_edge(&format!("edge_{}", i)).is_some());
     }
+}
+
+#[test]
+fn test_edge_builder() {
+    let db = GraphDB::new();
+
+    db.create_node(Node::new("a".to_string(), vec![], Properties::new())).unwrap();
+    db.create_node(Node::new("b".to_string(), vec![], Properties::new())).unwrap();
+
+    let edge = EdgeBuilder::new("a".to_string(), "b".to_string(), "KNOWS")
+        .id("e1")
+        .property("since", 2020i64)
+        .property("weight", 0.95f64)
+        .build();
+
+    db.create_edge(edge).unwrap();
+
+    let retrieved = db.get_edge("e1").unwrap();
+    assert_eq!(retrieved.from, "a");
+    assert_eq!(retrieved.to, "b");
+    assert_eq!(retrieved.edge_type, "KNOWS");
+    assert_eq!(retrieved.get_property("since"), Some(&PropertyValue::Integer(2020)));
 }
 
 // ============================================================================
@@ -307,15 +279,15 @@ mod property_tests {
         "[a-z][a-z0-9_]{0,20}".prop_map(|s| s.to_string())
     }
 
-    fn rel_type_strategy() -> impl Strategy<Value = RelationType> {
-        "[A-Z_]{2,15}".prop_map(|name| RelationType { name })
+    fn edge_type_strategy() -> impl Strategy<Value = String> {
+        "[A-Z_]{2,15}".prop_map(|s| s.to_string())
     }
 
     proptest! {
         #[test]
         fn test_edge_roundtrip(
             edge_id in edge_id_strategy(),
-            rel_type in rel_type_strategy()
+            edge_type in edge_type_strategy()
         ) {
             let db = GraphDB::new();
 
@@ -327,7 +299,7 @@ mod property_tests {
                 edge_id.clone(),
                 "from".to_string(),
                 "to".to_string(),
-                rel_type.clone(),
+                edge_type.clone(),
                 Properties::new(),
             );
 
@@ -335,7 +307,7 @@ mod property_tests {
 
             let retrieved = db.get_edge(&edge_id).unwrap();
             assert_eq!(retrieved.id, edge_id);
-            assert_eq!(retrieved.rel_type.name, rel_type.name);
+            assert_eq!(retrieved.edge_type, edge_type);
         }
 
         #[test]
@@ -353,7 +325,7 @@ mod property_tests {
                     edge_id.clone(),
                     "source".to_string(),
                     "target".to_string(),
-                    RelationType { name: "TEST".to_string() },
+                    "TEST".to_string(),
                     Properties::new(),
                 );
                 db.create_edge(edge).unwrap();

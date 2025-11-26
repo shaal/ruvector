@@ -3,7 +3,7 @@
 //! Tests to verify that RuVector graph database is compatible with Neo4j
 //! in terms of query syntax and result format.
 
-use ruvector_graph::{GraphDB, Node, Edge, Label, RelationType, Properties, PropertyValue};
+use ruvector_graph::{GraphDB, Node, Edge, Label, Properties, PropertyValue};
 
 fn setup_movie_graph() -> GraphDB {
     let db = GraphDB::new();
@@ -71,7 +71,7 @@ fn setup_movie_graph() -> GraphDB {
         "e1".to_string(),
         "keanu".to_string(),
         "matrix".to_string(),
-        RelationType { name: "ACTED_IN".to_string() },
+        "ACTED_IN".to_string(),
         keanu_role,
     )).unwrap();
 
@@ -79,7 +79,7 @@ fn setup_movie_graph() -> GraphDB {
         "e2".to_string(),
         "carrie".to_string(),
         "matrix".to_string(),
-        RelationType { name: "ACTED_IN".to_string() },
+        "ACTED_IN".to_string(),
         carrie_role,
     )).unwrap();
 
@@ -87,7 +87,7 @@ fn setup_movie_graph() -> GraphDB {
         "e3".to_string(),
         "laurence".to_string(),
         "matrix".to_string(),
-        RelationType { name: "ACTED_IN".to_string() },
+        "ACTED_IN".to_string(),
         laurence_role,
     )).unwrap();
 
@@ -152,7 +152,7 @@ fn test_neo4j_match_relationship() {
     // assert_eq!(results.len(), 3);
 
     let edge = db.get_edge("e1").unwrap();
-    assert_eq!(edge.rel_type.name, "ACTED_IN");
+    assert_eq!(edge.edge_type, "ACTED_IN");
 }
 
 #[test]
@@ -290,30 +290,6 @@ fn test_neo4j_null_property() {
     let node = db.get_node("n1").unwrap();
     assert_eq!(node.properties.get("optional"), Some(&PropertyValue::Null));
 }
-
-// ============================================================================
-// Neo4j Result Format Compatibility
-// ============================================================================
-
-// TODO: Implement query result format tests
-// #[test]
-// fn test_neo4j_result_format() {
-//     // Verify that query results match Neo4j format
-//     // - Columns
-//     // - Rows
-//     // - Metadata
-// }
-
-// ============================================================================
-// Neo4j Protocol Compatibility (Future)
-// ============================================================================
-
-// TODO: Test Bolt protocol compatibility
-// #[test]
-// fn test_bolt_protocol_handshake() {}
-
-// #[test]
-// fn test_bolt_protocol_query() {}
 
 // ============================================================================
 // Known Differences from Neo4j

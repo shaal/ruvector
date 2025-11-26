@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(hedge.edge_type, "COLLABORATION");
         assert_eq!(hedge.confidence, 0.95);
         assert!(hedge.description.is_some());
-        assert_eq!(hedge.get_property("project").unwrap().as_str(), Some("X"));
+        assert_eq!(hedge.get_property("project"), Some(&PropertyValue::String("X".to_string())));
     }
 
     #[test]

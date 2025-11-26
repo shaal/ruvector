@@ -431,9 +431,9 @@ mod tests {
     fn test_edge_type_index() {
         let index = EdgeTypeIndex::new();
 
-        let edge1 = Edge::new("n1".to_string(), "n2".to_string(), "KNOWS");
-        let edge2 = Edge::new("n2".to_string(), "n3".to_string(), "KNOWS");
-        let edge3 = Edge::new("n1".to_string(), "n3".to_string(), "WORKS_WITH");
+        let edge1 = Edge::create("n1".to_string(), "n2".to_string(), "KNOWS");
+        let edge2 = Edge::create("n2".to_string(), "n3".to_string(), "KNOWS");
+        let edge3 = Edge::create("n1".to_string(), "n3".to_string(), "WORKS_WITH");
 
         index.add_edge(&edge1);
         index.add_edge(&edge2);
@@ -452,9 +452,9 @@ mod tests {
     fn test_adjacency_index() {
         let index = AdjacencyIndex::new();
 
-        let edge1 = Edge::new("n1".to_string(), "n2".to_string(), "KNOWS");
-        let edge2 = Edge::new("n1".to_string(), "n3".to_string(), "KNOWS");
-        let edge3 = Edge::new("n2".to_string(), "n1".to_string(), "KNOWS");
+        let edge1 = Edge::create("n1".to_string(), "n2".to_string(), "KNOWS");
+        let edge2 = Edge::create("n1".to_string(), "n3".to_string(), "KNOWS");
+        let edge3 = Edge::create("n2".to_string(), "n1".to_string(), "KNOWS");
 
         index.add_edge(&edge1);
         index.add_edge(&edge2);

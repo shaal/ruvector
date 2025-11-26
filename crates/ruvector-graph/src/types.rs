@@ -44,6 +44,45 @@ impl PropertyValue {
     pub fn map(m: HashMap<String, PropertyValue>) -> Self { PropertyValue::Map(m) }
 }
 
+// From implementations for convenient property value creation
+impl From<bool> for PropertyValue {
+    fn from(b: bool) -> Self { PropertyValue::Boolean(b) }
+}
+
+impl From<i64> for PropertyValue {
+    fn from(i: i64) -> Self { PropertyValue::Integer(i) }
+}
+
+impl From<i32> for PropertyValue {
+    fn from(i: i32) -> Self { PropertyValue::Integer(i as i64) }
+}
+
+impl From<f64> for PropertyValue {
+    fn from(f: f64) -> Self { PropertyValue::Float(f) }
+}
+
+impl From<f32> for PropertyValue {
+    fn from(f: f32) -> Self { PropertyValue::Float(f as f64) }
+}
+
+impl From<String> for PropertyValue {
+    fn from(s: String) -> Self { PropertyValue::String(s) }
+}
+
+impl From<&str> for PropertyValue {
+    fn from(s: &str) -> Self { PropertyValue::String(s.to_string()) }
+}
+
+impl<T: Into<PropertyValue>> From<Vec<T>> for PropertyValue {
+    fn from(v: Vec<T>) -> Self {
+        PropertyValue::Array(v.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<HashMap<String, PropertyValue>> for PropertyValue {
+    fn from(m: HashMap<String, PropertyValue>) -> Self { PropertyValue::Map(m) }
+}
+
 pub type Properties = HashMap<String, PropertyValue>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]

@@ -134,25 +134,8 @@ cypher-pest = ["pest", "pest_derive"]
 cypher-lalrpop = ["lalrpop-util"]
 
 [[example]]
-name = "simple_graph"
-path = "examples/simple_graph.rs"
-
-[[example]]
-name = "cypher_queries"
-path = "examples/cypher_queries.rs"
-
-[[example]]
-name = "distributed_setup"
-path = "examples/distributed_setup.rs"
-required-features = ["distributed"]
-
-[[example]]
-name = "hybrid_search"
-path = "examples/hybrid_search.rs"
-
-[[example]]
-name = "hypergraph_rag"
-path = "examples/hypergraph_rag.rs"
+name = "test_cypher_parser"
+path = "examples/test_cypher_parser.rs"
 
 [lib]
 crate-type = ["rlib"]

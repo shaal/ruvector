@@ -282,12 +282,22 @@ impl WriteSet {
 pub struct Transaction {
     id: TxnId,
     manager: Arc<TransactionManager>,
-    isolation_level: IsolationLevel,
+    /// The isolation level for this transaction
+    pub isolation_level: IsolationLevel,
     start_time: Timestamp,
     writes: Arc<RwLock<WriteSet>>,
 }
 
 impl Transaction {
+    /// Begin a new standalone transaction
+    ///
+    /// This creates an internal TransactionManager for simple use cases.
+    /// For production use, prefer using a shared TransactionManager.
+    pub fn begin(isolation_level: IsolationLevel) -> Result<Self> {
+        let manager = TransactionManager::new();
+        Ok(manager.begin(isolation_level))
+    }
+
     /// Get transaction ID
     pub fn id(&self) -> TxnId {
         self.id

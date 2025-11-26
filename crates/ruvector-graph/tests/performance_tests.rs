@@ -2,7 +2,7 @@
 //!
 //! Benchmark tests to ensure performance doesn't degrade over time.
 
-use ruvector_graph::{GraphDB, Node, Edge, Label, RelationType, Properties, PropertyValue};
+use ruvector_graph::{GraphDB, Node, Edge, Label, Properties, PropertyValue};
 use std::time::Instant;
 
 // ============================================================================
@@ -94,7 +94,7 @@ fn test_edge_creation_performance() {
                 format!("e_{}_{}", i, j),
                 format!("n{}", i),
                 format!("n{}", to),
-                RelationType { name: "CONNECTS".to_string() },
+                "CONNECTS".to_string(),
                 Properties::new(),
             );
 
@@ -410,7 +410,7 @@ fn setup_benchmark_graph(num_nodes: usize) -> GraphDB {
             format!("knows_{}", i),
             format!("person_{}", from),
             format!("person_{}", to),
-            RelationType { name: "KNOWS".to_string() },
+            "KNOWS".to_string(),
             Properties::new(),
         )).unwrap();
     }
