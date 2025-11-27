@@ -154,3 +154,85 @@ pub struct BackupParams {
     pub db_path: String,
     pub backup_path: String,
 }
+
+// ==================== GNN Tool Parameters ====================
+
+/// Tool call parameters for gnn_layer_create
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnLayerCreateParams {
+    pub input_dim: usize,
+    pub hidden_dim: usize,
+    pub heads: usize,
+    #[serde(default = "default_dropout")]
+    pub dropout: f32,
+}
+
+fn default_dropout() -> f32 {
+    0.1
+}
+
+/// Tool call parameters for gnn_forward
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnForwardParams {
+    pub layer_id: String,
+    pub node_embedding: Vec<f64>,
+    pub neighbor_embeddings: Vec<Vec<f64>>,
+    pub edge_weights: Vec<f64>,
+}
+
+/// Tool call parameters for gnn_batch_forward
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnBatchForwardParams {
+    pub layer_config: GnnLayerConfigParams,
+    pub operations: Vec<GnnOperationParams>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnLayerConfigParams {
+    pub input_dim: usize,
+    pub hidden_dim: usize,
+    pub heads: usize,
+    #[serde(default = "default_dropout")]
+    pub dropout: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnOperationParams {
+    pub node_embedding: Vec<f64>,
+    pub neighbor_embeddings: Vec<Vec<f64>>,
+    pub edge_weights: Vec<f64>,
+}
+
+/// Tool call parameters for gnn_cache_stats
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnCacheStatsParams {
+    #[serde(default)]
+    pub include_details: bool,
+}
+
+/// Tool call parameters for gnn_compress
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnCompressParams {
+    pub embedding: Vec<f64>,
+    pub access_freq: f64,
+}
+
+/// Tool call parameters for gnn_decompress
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnDecompressParams {
+    pub compressed_json: String,
+}
+
+/// Tool call parameters for gnn_search
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GnnSearchParams {
+    pub query: Vec<f64>,
+    pub candidates: Vec<Vec<f64>>,
+    pub k: usize,
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+}
+
+fn default_temperature() -> f64 {
+    1.0
+}
