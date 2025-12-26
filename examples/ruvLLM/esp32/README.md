@@ -6,6 +6,7 @@
   <a href="#"><img src="https://img.shields.io/badge/ESP32-S2%20|%20S3%20|%20C3%20|%20C6-blue.svg?style=flat-square&logo=espressif" alt="ESP32"></a>
   <a href="#"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="MIT License"></a>
   <a href="https://crates.io/crates/ruvllm-esp32"><img src="https://img.shields.io/crates/v/ruvllm-esp32.svg?style=flat-square" alt="crates.io"></a>
+  <a href="https://www.npmjs.com/package/ruvllm-esp32"><img src="https://img.shields.io/npm/v/ruvllm-esp32.svg?style=flat-square&logo=npm" alt="npm"></a>
   <a href="#"><img src="https://img.shields.io/badge/RuVector-integrated-ff69b4.svg?style=flat-square" alt="RuVector"></a>
 </p>
 
@@ -265,13 +266,55 @@ cargo install espflash
 espflash flash --monitor target/release/ruvllm-esp32
 ```
 
-### Crate Links
+### Option C: npx CLI (Zero Setup - Recommended for Flashing)
+
+The fastest way to get RuvLLM running on real hardware. No Rust toolchain required!
+
+```bash
+# Install ESP32 toolchain automatically
+npx ruvllm-esp32 install
+
+# Initialize a new project with templates
+npx ruvllm-esp32 init my-ai-project
+
+# Build for your target
+npx ruvllm-esp32 build --target esp32s3
+
+# Flash to device
+npx ruvllm-esp32 flash --port /dev/ttyUSB0
+
+# All-in-one: build and flash
+npx ruvllm-esp32 build --target esp32s3 --flash
+```
+
+**Available Commands:**
+| Command | Description |
+|---------|-------------|
+| `install` | Install ESP32 Rust toolchain (espup, espflash) |
+| `init <name>` | Create new project from template |
+| `build` | Build firmware for target |
+| `flash` | Flash firmware to device |
+| `monitor` | Open serial monitor |
+| `clean` | Clean build artifacts |
+
+**Ready-to-Flash Project:**
+
+For a complete flashable project with all features, see [`../esp32-flash/`](../esp32-flash/):
+
+```bash
+cd ../esp32-flash
+npx ruvllm-esp32 build --target esp32s3 --flash
+```
+
+### Crate & Package Links
 
 | Resource | Link |
 |----------|------|
 | **crates.io** | [crates.io/crates/ruvllm-esp32](https://crates.io/crates/ruvllm-esp32) |
 | **docs.rs** | [docs.rs/ruvllm-esp32](https://docs.rs/ruvllm-esp32) |
+| **npm** | [npmjs.com/package/ruvllm-esp32](https://www.npmjs.com/package/ruvllm-esp32) |
 | **GitHub** | [github.com/ruvnet/ruvector](https://github.com/ruvnet/ruvector) |
+| **Flashable Project** | [esp32-flash/](../esp32-flash/) |
 
 ---
 
@@ -1867,3 +1910,5 @@ MIT License - See [LICENSE](LICENSE)
 - [RuvLLM](../README.md) - Full LLM orchestration system
 - [Ruvector](../../README.md) - Vector database with HNSW indexing
 - [ESP-IDF](https://github.com/espressif/esp-idf) - ESP32 development framework
+- [ruvllm-esp32 npm](https://www.npmjs.com/package/ruvllm-esp32) - Cross-platform CLI for flashing
+- [esp32-flash/](../esp32-flash/) - Ready-to-flash project with all features
