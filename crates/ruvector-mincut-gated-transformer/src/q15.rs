@@ -494,6 +494,7 @@ impl From<Q15> for f64 {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
     use super::*;
     use alloc::format;
 

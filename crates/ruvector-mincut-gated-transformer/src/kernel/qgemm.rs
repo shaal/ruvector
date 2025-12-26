@@ -17,6 +17,47 @@ use core::arch::x86_64::*;
 #[cfg(all(feature = "simd", target_arch = "aarch64"))]
 use core::arch::aarch64::*;
 
+// =============================================================================
+// Software Prefetch Hints
+// =============================================================================
+
+/// Prefetch data into L1 cache for temporal access (data will be used multiple times).
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline(always)]
+unsafe fn prefetch_t0(ptr: *const i8) {
+    _mm_prefetch(ptr, _MM_HINT_T0);
+}
+
+/// Prefetch data into L2 cache for temporal access.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline(always)]
+unsafe fn prefetch_t1(ptr: *const i8) {
+    _mm_prefetch(ptr, _MM_HINT_T1);
+}
+
+/// Prefetch data for non-temporal access (data will be used once).
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[inline(always)]
+unsafe fn prefetch_nta(ptr: *const i8) {
+    _mm_prefetch(ptr, _MM_HINT_NTA);
+}
+
+/// No-op prefetch for non-SIMD builds.
+#[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+#[inline(always)]
+#[allow(dead_code)]
+fn prefetch_t0(_ptr: *const i8) {}
+
+#[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+#[inline(always)]
+#[allow(dead_code)]
+fn prefetch_t1(_ptr: *const i8) {}
+
+#[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+#[inline(always)]
+#[allow(dead_code)]
+fn prefetch_nta(_ptr: *const i8) {}
+
 /// Quantized GEMM: C = A * B^T + bias
 ///
 /// Computes matrix multiplication with int8 inputs, accumulating to i64 for safety.
@@ -67,7 +108,23 @@ pub fn qgemm_i8(
 
     // Scalar implementation with safety and scale application
     for i in 0..m {
+        // Prefetch next row of A into L2 cache
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if i + 1 < m {
+            let next_row_ptr = a.as_ptr().wrapping_add((i + 1) * k);
+            // SAFETY: prefetch is a hint, safe even with invalid addresses
+            unsafe { prefetch_t1(next_row_ptr); }
+        }
+
         for j in 0..n {
+            // Prefetch next row of B into L1 cache (hot path)
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            if j + 1 < n {
+                let next_b_row_ptr = b.as_ptr().wrapping_add((j + 1) * k);
+                // SAFETY: prefetch is a hint, safe even with invalid addresses
+                unsafe { prefetch_t0(next_b_row_ptr); }
+            }
+
             // Use i64 accumulator to prevent overflow with large k
             let mut acc: i64 = 0;
 
@@ -134,9 +191,22 @@ pub unsafe fn qgemm_i8_avx2(
     }
 
     let k_chunks = k / 32; // Process 32 elements at a time
+    const PREFETCH_DISTANCE: usize = 4; // Rows ahead to prefetch
 
     for i in 0..m {
+        // Prefetch future rows of A into L2
+        if i + PREFETCH_DISTANCE < m {
+            let prefetch_row = &a[(i + PREFETCH_DISTANCE) * k..];
+            _mm_prefetch(prefetch_row.as_ptr(), _MM_HINT_T1);
+        }
+
         for j in 0..n {
+            // Prefetch next rows of B into L1 (hot path)
+            if j + PREFETCH_DISTANCE < n {
+                let prefetch_b = &b[(j + PREFETCH_DISTANCE) * k..];
+                _mm_prefetch(prefetch_b.as_ptr(), _MM_HINT_T0);
+            }
+
             let mut acc = _mm256_setzero_si256();
             let a_row = &a[i * k..];
             let b_row = &b[j * k..];
@@ -355,6 +425,7 @@ pub fn compute_scale(values: &[f32]) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
     use super::*;
     use alloc::vec::Vec;
 

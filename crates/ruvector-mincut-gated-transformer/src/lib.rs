@@ -141,7 +141,7 @@ pub use trace::{TraceState, TraceSnapshot, TraceCounters};
 pub use attention::spike_driven::{SpikeDrivenAttention, SpikeDrivenConfig, SpikeTrain};
 
 #[cfg(feature = "spectral_pe")]
-pub use spectral::{SpectralPositionEncoder, SpectralPEConfig};
+pub use spectral::{SpectralPositionEncoder, SpectralPEConfig, SparseCSR, lanczos_sparse, power_iteration_sparse};
 
 #[cfg(feature = "sparse_attention")]
 pub use sparse_attention::{MincutSparseAttention, SparseMask, SparsityConfig, LambdaDensitySchedule};
