@@ -2095,19 +2095,39 @@ program
 // Self-Learning Intelligence Hooks
 // ============================================
 
-const INTEL_PATH = path.join(require('os').homedir(), '.ruvector', 'intelligence.json');
-
 class Intelligence {
   constructor() {
+    this.intelPath = this.getIntelPath();
     this.data = this.load();
     this.alpha = 0.1;
     this.lastEditedFile = null;
   }
 
+  // Prefer project-local storage, fall back to home directory
+  getIntelPath() {
+    const projectPath = path.join(process.cwd(), '.ruvector', 'intelligence.json');
+    const homePath = path.join(require('os').homedir(), '.ruvector', 'intelligence.json');
+
+    // If project .ruvector exists, use it
+    if (fs.existsSync(path.dirname(projectPath))) {
+      return projectPath;
+    }
+    // If project .claude exists (hooks initialized), prefer project-local
+    if (fs.existsSync(path.join(process.cwd(), '.claude'))) {
+      return projectPath;
+    }
+    // If home .ruvector exists with data, use it
+    if (fs.existsSync(homePath)) {
+      return homePath;
+    }
+    // Default to project-local for new setups
+    return projectPath;
+  }
+
   load() {
     try {
-      if (fs.existsSync(INTEL_PATH)) {
-        return JSON.parse(fs.readFileSync(INTEL_PATH, 'utf-8'));
+      if (fs.existsSync(this.intelPath)) {
+        return JSON.parse(fs.readFileSync(this.intelPath, 'utf-8'));
       }
     } catch {}
     return {
@@ -2123,9 +2143,9 @@ class Intelligence {
   }
 
   save() {
-    const dir = path.dirname(INTEL_PATH);
+    const dir = path.dirname(this.intelPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(INTEL_PATH, JSON.stringify(this.data, null, 2));
+    fs.writeFileSync(this.intelPath, JSON.stringify(this.data, null, 2));
   }
 
   now() { return Math.floor(Date.now() / 1000); }
