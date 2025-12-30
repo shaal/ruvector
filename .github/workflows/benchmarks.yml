@@ -67,28 +67,42 @@ jobs:
             ${{ runner.os }}-cargo-build-benchmarks-
             ${{ runner.os }}-cargo-build-
 
+      - name: Install PostgreSQL 17
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y postgresql-17 postgresql-server-dev-17
+
+      - name: Install cargo-pgrx
+        run: cargo install cargo-pgrx --version 0.12.6 --locked
+
+      - name: Initialize pgrx
+        working-directory: crates/ruvector-postgres
+        run: cargo pgrx init --pg17=/usr/lib/postgresql/17/bin/pg_config
+
       - name: Install criterion
         run: cargo install cargo-criterion || true
 
       - name: Run distance benchmarks
         working-directory: crates/ruvector-postgres
         run: |
-          cargo bench --bench distance_bench -- --output-format bencher | tee ../../distance_bench.txt
+          cargo bench --features pg17 --bench distance_bench -- --output-format bencher | tee ../../distance_bench.txt
 
       - name: Run index benchmarks
         working-directory: crates/ruvector-postgres
         run: |
-          cargo bench --bench index_bench -- --output-format bencher | tee ../../index_bench.txt
+          cargo bench --features pg17 --bench index_bench -- --output-format bencher | tee ../../index_bench.txt
 
       - name: Run quantization benchmarks
         working-directory: crates/ruvector-postgres
         run: |
-          cargo bench --bench quantization_bench -- --output-format bencher | tee ../../quantization_bench.txt
+          cargo bench --features pg17 --bench quantization_bench -- --output-format bencher | tee ../../quantization_bench.txt
 
       - name: Run quantized distance benchmarks
         working-directory: crates/ruvector-postgres
         run: |
-          cargo bench --bench quantized_distance_bench -- --output-format bencher | tee ../../quantized_distance_bench.txt
+          cargo bench --features pg17 --bench quantized_distance_bench -- --output-format bencher | tee ../../quantized_distance_bench.txt
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -277,11 +291,25 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Install PostgreSQL 17
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y postgresql-17 postgresql-server-dev-17
+
+      - name: Install cargo-pgrx
+        run: cargo install cargo-pgrx --version 0.12.6 --locked
+
+      - name: Initialize pgrx
+        working-directory: crates/ruvector-postgres
+        run: cargo pgrx init --pg17=/usr/lib/postgresql/17/bin/pg_config
+
       - name: Run baseline benchmarks
         working-directory: crates/ruvector-postgres
         run: |
-          cargo bench --bench distance_bench -- --output-format bencher | tee ../../baseline_distance.txt
-          cargo bench --bench index_bench -- --output-format bencher | tee ../../baseline_index.txt
+          cargo bench --features pg17 --bench distance_bench -- --output-format bencher | tee ../../baseline_distance.txt
+          cargo bench --features pg17 --bench index_bench -- --output-format bencher | tee ../../baseline_index.txt
 
       - name: Compare results
         run: |
