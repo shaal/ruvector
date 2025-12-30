@@ -2277,15 +2277,15 @@ hooksCmd.command('init').description('Initialize hooks in current project').opti
   }
   settings.hooks = settings.hooks || {};
   settings.hooks.PreToolUse = [
-    { matcher: 'Edit|Write|MultiEdit', hooks: ['ruvector hooks pre-edit "$TOOL_INPUT_file_path"'] },
-    { matcher: 'Bash', hooks: ['ruvector hooks pre-command "$TOOL_INPUT_command"'] }
+    { matcher: 'Edit|Write|MultiEdit', hooks: ['npx ruvector hooks pre-edit "$TOOL_INPUT_file_path"'] },
+    { matcher: 'Bash', hooks: ['npx ruvector hooks pre-command "$TOOL_INPUT_command"'] }
   ];
   settings.hooks.PostToolUse = [
-    { matcher: 'Edit|Write|MultiEdit', hooks: ['ruvector hooks post-edit "$TOOL_INPUT_file_path"'] },
-    { matcher: 'Bash', hooks: ['ruvector hooks post-command "$TOOL_INPUT_command"'] }
+    { matcher: 'Edit|Write|MultiEdit', hooks: ['npx ruvector hooks post-edit "$TOOL_INPUT_file_path"'] },
+    { matcher: 'Bash', hooks: ['npx ruvector hooks post-command "$TOOL_INPUT_command"'] }
   ];
-  settings.hooks.SessionStart = ['ruvector hooks session-start'];
-  settings.hooks.Stop = ['ruvector hooks session-end'];
+  settings.hooks.SessionStart = ['npx ruvector hooks session-start'];
+  settings.hooks.Stop = ['npx ruvector hooks session-end'];
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
   console.log(chalk.green('✅ Hooks initialized in .claude/settings.json'));
 });
