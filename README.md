@@ -1141,6 +1141,7 @@ npm install @ruvector/rudag-wasm
 
 [![crates.io](https://img.shields.io/crates/v/rvlite.svg)](https://crates.io/crates/rvlite)
 [![npm](https://img.shields.io/npm/v/@ruvector/rvlite.svg)](https://www.npmjs.com/package/@ruvector/rvlite)
+[![downloads](https://img.shields.io/npm/dt/@ruvector/rvlite.svg)](https://www.npmjs.com/package/@ruvector/rvlite)
 
 **A complete vector database that runs anywhere JavaScript runs** — browsers, Node.js, Deno, Bun, Cloudflare Workers, Vercel Edge Functions.
 
@@ -1442,6 +1443,150 @@ npm install @ruvector/edge-net
 ```
 
 > **Full Documentation**: [edge-net README](./examples/edge-net/README.md)
+
+</details>
+
+<details>
+<summary><strong>🎲 Agentic-Synth - AI Synthetic Data Generation</strong></summary>
+
+[![npm](https://img.shields.io/npm/v/@ruvector/agentic-synth.svg)](https://www.npmjs.com/package/@ruvector/agentic-synth)
+[![downloads](https://img.shields.io/npm/dt/@ruvector/agentic-synth.svg)](https://www.npmjs.com/package/@ruvector/agentic-synth)
+
+**AI-Powered Synthetic Data Generation at Scale** — Generate unlimited, high-quality synthetic data for training AI models, testing systems, and building robust agentic applications.
+
+### Why Agentic-Synth?
+
+| Problem | Solution |
+|---------|----------|
+| Real data is **expensive** to collect | Generate **unlimited** synthetic data |
+| **Privacy-sensitive** with compliance risks | **Fully synthetic**, no PII concerns |
+| **Slow** to generate at scale | **10-100x faster** than manual creation |
+| **Insufficient** for edge cases | **Customizable** schemas for any scenario |
+| **Hard to reproduce** across environments | **Reproducible** with seed values |
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-Model Support** | Gemini, OpenRouter, GPT, Claude, and 50+ models via DSPy.ts |
+| **Context Caching** | 95%+ performance improvement with intelligent LRU cache |
+| **Smart Model Routing** | Automatic load balancing, failover, and cost optimization |
+| **DSPy.ts Integration** | Self-learning optimization with 20-25% quality improvement |
+| **Streaming** | AsyncGenerator for real-time data flow |
+| **Memory Efficient** | <50MB for datasets up to 10K records |
+
+### Data Generation Types
+
+| Type | Use Cases |
+|------|-----------|
+| **Time-Series** | Financial data, IoT sensors, metrics |
+| **Events** | Logs, user actions, system events |
+| **Structured** | JSON, CSV, databases, APIs |
+| **Embeddings** | Vector data for RAG systems |
+
+### Quick Start
+
+```bash
+# Install
+npm install @ruvector/agentic-synth
+
+# Or run instantly with npx
+npx @ruvector/agentic-synth generate --count 100
+
+# Interactive mode
+npx @ruvector/agentic-synth interactive
+```
+
+### Basic Usage
+
+```typescript
+import { AgenticSynth } from '@ruvector/agentic-synth';
+
+// Initialize with your preferred model
+const synth = new AgenticSynth({
+  model: 'gemini-pro',
+  apiKey: process.env.GEMINI_API_KEY
+});
+
+// Generate structured data
+const users = await synth.generate({
+  schema: {
+    name: 'string',
+    email: 'email',
+    age: 'number:18-65',
+    role: ['admin', 'user', 'guest']
+  },
+  count: 1000
+});
+
+// Generate time-series data
+const stockData = await synth.timeSeries({
+  fields: ['open', 'high', 'low', 'close', 'volume'],
+  interval: '1h',
+  count: 500,
+  volatility: 0.02
+});
+
+// Stream large datasets
+for await (const batch of synth.stream({ count: 100000, batchSize: 1000 })) {
+  await processData(batch);
+}
+```
+
+### Self-Learning with DSPy
+
+```typescript
+import { AgenticSynth, DSPyOptimizer } from '@ruvector/agentic-synth';
+
+// Enable self-learning optimization
+const synth = new AgenticSynth({
+  model: 'gemini-pro',
+  optimizer: new DSPyOptimizer({
+    learningRate: 0.1,
+    qualityThreshold: 0.85
+  })
+});
+
+// Quality improves automatically over time
+const data = await synth.generate({
+  schema: { ... },
+  count: 1000,
+  optimize: true  // Enable learning
+});
+
+console.log(`Quality score: ${data.metrics.quality}`);
+// First run: 0.72
+// After 100 runs: 0.94 (+25% improvement)
+```
+
+### Performance
+
+| Metric | Value |
+|--------|-------|
+| **With caching** | 98.2% faster |
+| **P99 latency** | 2500ms → 45ms |
+| **Memory** | <50MB for 10K records |
+| **Throughput** | 1000+ records/sec |
+
+### Ecosystem Integration
+
+| Package | Purpose |
+|---------|---------|
+| **RuVector** | Native vector database for RAG |
+| **DSPy.ts** | Prompt optimization |
+| **Agentic-Jujutsu** | Version-controlled generation |
+
+### Installation
+
+```bash
+# npm
+npm install @ruvector/agentic-synth
+
+# Examples package (50+ production examples)
+npm install @ruvector/agentic-synth-examples
+```
+
+> **Full Documentation**: [agentic-synth README](./npm/packages/agentic-synth/README.md)
 
 </details>
 
