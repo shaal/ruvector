@@ -384,8 +384,8 @@ Keep GLM-4.7-Flash structure but replace only the expert MLP layers with BitLine
 
 ### Phase 0.5: RLM Post-Quantization Refinement (NEW — Mac Studio, $0)
 - **Timeline**: 1-3 weeks (overlaps with Phase 0 kernel development)
-- **Cost**: **$0** (runs on Mac Studio, ~2-12 days training wall time)
-- **Platform**: Mac Studio (same as Phase 0)
+- **Cost**: **$0** (runs on Mac Studio, ~2-12 days training wall time with Metal; ~4-24 days SIMD-only)
+- **Platform**: Mac Studio (same as Phase 0) — **supports both Metal GPU and pure SIMD/CPU modes** (see AD-20)
 - **Goal**: Improve Phase 0 PTQ quality from ~55-65% to ~70-80% by training only the small FP16 components using the existing RLM stack — **no traditional distillation, no cloud GPU**
 - **Approach**: Freeze ternary weights, train FP16 corrections using RLM components:
   1. **MicroLoRA adapters** (rank 1-2) on each expert FFN — adds small FP16 correction: `Y = BitLinear(X) + LoRA_B @ LoRA_A @ X`
@@ -396,7 +396,7 @@ Keep GLM-4.7-Flash structure but replace only the expert MLP layers with BitLine
   6. **Policy persistence** via PolicyStore — stores optimized per-layer configurations
 - **Trainable parameters**: ~200-400M (1-2% of 30B total) — router (~30M), MicroLoRA adapters (~50-100M), LM head (~150M), scale factors (~0.1M)
 - **Training data**: 100M-500M tokens (sufficient for <400M trainable params)
-- **Throughput**: ~500-1000 tok/s (Metal) × 100M-500M tokens = **2-12 days on Mac Studio**
+- **Throughput**: ~500-1000 tok/s (Metal) or ~200-500 tok/s (NEON SIMD only) × 100M-500M tokens = **2-12 days (Metal) or 4-24 days (SIMD-only) on Mac Studio**
 - **Deliverables**:
   - RLM-refined GGUF with ternary experts + optimized FP16 components
   - MicroLoRA adapter weights (exportable, ~20-100 MB)
@@ -853,16 +853,18 @@ let expert_results: Vec<DistillResult> = experts
 
 **Throughput and cost comparison:**
 
-| Platform | Training tok/s | Time (200B tok, Phase 1) | Cost | Phase 0 PTQ? |
-|----------|---------------|--------------------------|------|-------------|
-| **Mac Studio M4 Max (Metal)** | ~500-1000 | ~6.5 years | N/A | **Yes — 1-4 hrs, $0** |
-| **Mac Studio M3 Ultra (Metal)** | ~800-1500 | ~4.2 years | N/A | **Yes — 1-1.5 hrs, $0** |
-| CPU AVX2 (Ryzen 9) | ~50-100 | ~65 years | N/A | Yes — 2-6 hrs, $0 |
-| 1× A100 80GB (GCP on-demand) | ~15,000 | ~155 days | ~$3,700 | Yes — 30 min, ~$5 |
-| 4× A100 80GB (GCP on-demand) | ~50,000 | ~46 days | ~$4,400 | Overkill for PTQ |
-| 4× A100 80GB (GCP spot) | ~50,000 | ~46 days | **~$1,300** | Overkill for PTQ |
-| 1× H100 (DataCrunch) | ~40,000 | ~58 days | ~$2,900 | Overkill for PTQ |
-| 4× H100 (DataCrunch) | ~140,000 | ~16 days | **~$3,200** | Overkill for PTQ |
+| Platform | Training tok/s | Time (200B tok, Phase 1) | Cost | Phase 0 PTQ? | Phase 0.5 RLM? |
+|----------|---------------|--------------------------|------|-------------|---------------|
+| **Mac Studio M4 Max (Metal)** | ~500-1000 | ~6.5 years | N/A | **Yes — 1-4 hrs, $0** | **Yes — 2-12 days, $0** |
+| **Mac Studio M4 Max (NEON SIMD only, no Metal)** | ~200-500 | ~13 years | N/A | **Yes — 2-6 hrs, $0** | **Yes — 4-24 days, $0** |
+| **Mac Studio M3 Ultra (Metal)** | ~800-1500 | ~4.2 years | N/A | **Yes — 1-1.5 hrs, $0** | **Yes — 1.5-8 days, $0** |
+| **Mac Studio M3 Ultra (NEON SIMD only, no Metal)** | ~300-700 | ~9 years | N/A | **Yes — 1.5-3 hrs, $0** | **Yes — 3-16 days, $0** |
+| CPU AVX2 (Ryzen 9) — scalar fallback | ~50-150 | ~43-130 years | N/A | Yes — 2-6 hrs, $0 | Yes — 14-58 days, $0 |
+| 1× A100 80GB (GCP on-demand) | ~15,000 | ~155 days | ~$3,700 | Yes — 30 min, ~$5 | Overkill |
+| 4× A100 80GB (GCP on-demand) | ~50,000 | ~46 days | ~$4,400 | Overkill for PTQ | Overkill |
+| 4× A100 80GB (GCP spot) | ~50,000 | ~46 days | **~$1,300** | Overkill for PTQ | Overkill |
+| 1× H100 (DataCrunch) | ~40,000 | ~58 days | ~$2,900 | Overkill for PTQ | Overkill |
+| 4× H100 (DataCrunch) | ~140,000 | ~16 days | **~$3,200** | Overkill for PTQ | Overkill |
 
 **Key insight**: Mac Studio is infeasible for Phase 1+ training (years of wall time) but **ideal for Phase 0 PTQ** (hours, $0). This separation justifies the phased approach.
 
@@ -872,7 +874,8 @@ let expert_results: Vec<DistillResult> = experts
 |-------|----------|----------|----------------|----------|
 | **Phase 0 (PTQ)** | **Mac Studio (M4 Max/M3 Ultra)** | **1-4 hours** | **$0** | **Mmap FP16 weights → absmean quantize → export GGUF; Metal GPU for calibration pass** |
 | Phase 0D (BitDistill Lite, 10B tok) | Mac Studio Metal or 1× A100 spot | 2-4 weeks (local) / 1-2 days (cloud) | $0 (local) / ~$300 (cloud) | Optional quality upgrade if Phase 0C too degraded |
-| **Phase 0.5 (RLM refinement, 100-500M tok)** | **Mac Studio (Metal)** | **3-14 days** | **$0** | **MicroLoRA + router fix + scale opt using existing RLM stack** |
+| **Phase 0.5 (RLM refinement, Metal)** | **Mac Studio (Metal)** | **3-14 days** | **$0** | **MicroLoRA + router fix + scale opt using existing RLM stack** |
+| **Phase 0.5 (RLM refinement, SIMD-only)** | **Mac Studio (NEON CPU)** | **5-28 days** | **$0** | **Same pipeline, no Metal required — pure ndarray + NEON SIMD (see AD-20)** |
 | Phase 1 (expert FFN, 200B tok) | 4× A100 80GB spot (GCP) | ~46 days | $1,300-$2,000 | Per-expert sequential with EWC++; each expert fits 1 GPU |
 | Phase 1 (router validation) | Mac Studio Metal or 1× A100 | ~2-4 hours | $0 (local) / <$10 (cloud) | Contrastive training on router only (~2B params) |
 | Phase 2 (full ternary, 500B tok) | 4× H100 (DataCrunch) | ~16-32 days | $2,500-$5,000 | All layers; model-parallel across GPUs |
@@ -1155,6 +1158,100 @@ All three can be addressed by training only the FP16 components using the existi
 **Reused (100%)**: `MicroLoRA`, `TrainingPipeline`, `EwcRegularizer`, `GrpoOptimizer`, `ContrastiveTrainer`, `MemoryDistiller`, `PolicyStore`, `TrainingConfig`, LR schedules, GGUF export.
 **New (0%)**: No new training code. The only new code is a thin `RlmRefiner` orchestrator (~200-300 lines) that wires the existing components together for the Phase 0.5 pipeline.
 
+### AD-20: Phase 0.5 — SIMD-Only Training Mode (No Metal GPU Required)
+
+**Decision**: Phase 0.5 RLM refinement supports a pure SIMD/CPU execution mode with no Metal GPU dependency. Metal is an optional acceleration path (~2-3x faster) but not required.
+
+**Rationale**: Analysis of the RLM training stack reveals that Metal GPU is used by only one component (`RealContrastiveTrainer` via Candle), while all other training components are pure ndarray/CPU. Since Phase 0.5 uses the lightweight `ContrastiveTrainer` (not `RealContrastiveTrainer`) for router repair, and all gradient computation is ndarray-based, the entire pipeline runs on pure CPU with SIMD acceleration for inference forward passes.
+
+**Component-by-component GPU dependency analysis:**
+
+| Component | Source | GPU Dependency | SIMD-Only Mode |
+|-----------|--------|---------------|----------------|
+| `MicroLoRA.forward_simd()` | `lora/micro_lora.rs:279` | **None** — ARM NEON intrinsics with scalar fallback | NEON on aarch64, scalar on x86 |
+| `MicroLoRA.apply_gradients()` | `lora/micro_lora.rs:621+` | **None** — pure ndarray | Works everywhere |
+| `MicroLoRA.apply_gradients_with_ewc()` | `lora/micro_lora.rs:621+` | **None** — pure ndarray | Works everywhere |
+| `TrainingPipeline` | `lora/training.rs` | **None** — pure ndarray CPU | Works everywhere |
+| `EwcRegularizer` | `lora/training.rs` | **None** — pure ndarray CPU | Works everywhere |
+| `GrpoOptimizer` | `training/grpo.rs` | **None** — pure ndarray CPU | Works everywhere |
+| `ContrastiveTrainer` | `training/contrastive.rs:169-175` | **Optional** — `use_metal: true` default, but `Device::new_metal(0).unwrap_or(Device::Cpu)` fallback | Set `use_metal: false` for CPU-only; also has non-Candle pure CPU path (line 475) |
+| `MemoryDistiller` | `reasoning_bank/distillation.rs` | **None** — pure Rust | Works everywhere |
+| `PolicyStore` | `policy_store.rs` | **None** — pure Rust | Works everywhere |
+| **`RealContrastiveTrainer`** | `training/real_trainer.rs:178` | **Yes — Metal/Candle** | **NOT used in Phase 0.5** (used in full distillation only) |
+
+**Inference forward pass (for loss computation) SIMD support:**
+
+| Kernel | NEON (aarch64) | x86 | Source |
+|--------|---------------|-----|--------|
+| GEMM | `gemm_neon` | `gemm_scalar` fallback | `kernels/matmul.rs:520` |
+| GEMV | `gemv_neon` | `gemv_scalar` fallback | `kernels/matmul.rs:184` |
+| SiLU | `silu_neon_impl` (~3.5x speedup) | scalar fallback | `kernels/activations.rs` |
+| GeLU | `gelu_neon_impl` (~3.2x speedup) | scalar fallback | `kernels/activations.rs` |
+| ReLU | `relu_neon_impl` (~4.0x speedup) | scalar fallback | `kernels/activations.rs` |
+| RMSNorm | `rms_norm_neon` | scalar fallback | `kernels/norm.rs` |
+| RoPE | `apply_rope_neon` | scalar fallback | `kernels/rope.rs` |
+| Softmax | `softmax_neon` (~2.8x speedup) | scalar fallback | `kernels/activations.rs` |
+
+**Key observation**: The matmul kernels only dispatch on `target_arch = "aarch64"` vs scalar. There are **no explicit AVX2 or AVX512 SIMD implementations** for x86 in the current kernel codebase. This means:
+- **Apple Silicon (aarch64)**: Full NEON SIMD acceleration — primary target for SIMD-only mode
+- **x86 (AMD/Intel)**: Falls to scalar fallback — works but ~3-5x slower than NEON
+- **Future opportunity**: Adding AVX2/AVX512 kernels to `matmul.rs` would make x86 competitive with NEON
+
+**Throughput comparison for Phase 0.5 (100M tokens, ~200-400M trainable params, 3B active forward):**
+
+| Execution Mode | Forward tok/s | Effective Training tok/s | 100M Tokens | 500M Tokens |
+|---------------|--------------|------------------------|------------|------------|
+| Metal GPU (M4 Max) | ~500-1500 | ~300-700 | ~2-4 days | ~8-19 days |
+| **NEON SIMD only (M4 Max CPU)** | **~200-500** | **~100-300** | **~4-12 days** | **~19-58 days** |
+| **NEON SIMD only (M3 Ultra CPU)** | **~300-700** | **~150-400** | **~3-8 days** | **~14-39 days** |
+| x86 scalar (Ryzen 9, no AVX2 kernels) | ~50-150 | ~30-80 | ~14-39 days | ~72-193 days |
+
+**Why SIMD-only is ~2-3x slower than Metal (not 10x):**
+- Phase 0.5 training is dominated by the forward pass through the frozen 3B active parameters to compute loss against the teacher
+- The forward pass uses SIMD-accelerated GEMM/GEMV (`gemm_neon`/`gemv_neon`) which gets ~60-70% of Metal throughput for these matrix sizes
+- Gradient computation for the ~200-400M trainable params is pure ndarray — identical speed regardless of Metal availability
+- The training bottleneck is I/O (loading teacher activations from mmap) not compute, further narrowing the gap
+
+**Platform portability (bonus of SIMD-only mode):**
+
+SIMD-only mode extends Phase 0.5 beyond Mac Studio to any platform with ndarray support:
+
+| Platform | SIMD Path | Effective tok/s | Feasible? |
+|----------|----------|----------------|-----------|
+| Mac Studio M4 Max (aarch64) | NEON intrinsics | ~100-300 | **Yes — primary target** |
+| Mac Studio M3 Ultra (aarch64) | NEON intrinsics | ~150-400 | **Yes — faster than M4 Max** |
+| Linux ARM64 (Ampere/Graviton) | NEON intrinsics | ~80-200 | **Yes — cloud ARM instances** |
+| Linux x86 (Ryzen/Xeon) | Scalar fallback | ~30-80 | **Marginal — 100M tokens feasible (~14-39 days), 500M not practical** |
+| macOS Intel | Scalar fallback | ~20-50 | **Not recommended** |
+
+**Configuration for SIMD-only mode:**
+
+```rust
+// Phase 0.5 SIMD-only config (no Metal)
+let contrastive_config = ContrastiveConfig {
+    use_metal: false,    // Force CPU path in ContrastiveTrainer
+    ..Default::default()
+};
+
+// MicroLoRA — already pure SIMD/ndarray, no config change needed
+// TrainingPipeline — already pure ndarray
+// GrpoOptimizer — already pure ndarray
+// EwcRegularizer — already pure ndarray
+```
+
+The only config change is `ContrastiveTrainer.use_metal = false`. All other RLM components are GPU-agnostic by design.
+
+**SIMD-only Phase 0.5 exit criteria (in addition to standard Phase 0.5 criteria):**
+- [ ] All training completes without Metal GPU dependency
+- [ ] `ContrastiveTrainer` runs with `use_metal: false` and produces equivalent router accuracy
+- [ ] MicroLoRA `forward_simd()` executes NEON path on aarch64 (verified via `cfg` compile check)
+- [ ] Training throughput measured and documented for SIMD-only vs Metal comparison
+
+**Recommendation**: Use Metal when available (2-3x faster), fall back to SIMD-only when Metal is unavailable or on non-Mac platforms. The training code requires zero changes — only `ContrastiveTrainer.use_metal` needs to be set to `false`.
+
+**Reused**: 100% of existing RLM stack — `MicroLoRA` NEON forward, ndarray training, `ContrastiveTrainer` CPU fallback, all existing SIMD kernels.
+**New**: 0 lines. SIMD-only mode is already supported by the existing code paths; AD-20 documents this capability explicitly.
+
 ---
 
 ## Consequences
@@ -1177,6 +1274,8 @@ All three can be addressed by training only the FP16 components using the existi
 14. **Existing GGUF ecosystem**: Community-published GLM-4.7-Flash GGUFs (bartowski, unsloth) available as comparison baselines
 15. **Phase 0.5 RLM refinement at $0**: Existing MicroLoRA + GRPO + EWC++ + ContrastiveTrainer stack provides ~10-15 percentage point quality recovery over raw PTQ with zero new training code, running entirely on Mac Studio
 16. **100% RLM reuse for Phase 0.5**: No new training infrastructure needed — all 7 RLM components are production-tested and wire together directly
+17. **SIMD-only Phase 0.5**: Entire RLM refinement pipeline runs on pure CPU SIMD (NEON on aarch64) without Metal GPU — only ~2-3x slower than Metal, extends platform support to Linux ARM64 and (with scalar fallback) x86
+18. **Zero-config SIMD mode**: All training components (MicroLoRA, TrainingPipeline, EwcRegularizer, GrpoOptimizer) are already GPU-agnostic; only `ContrastiveTrainer.use_metal = false` needed for full SIMD-only execution
 
 ### Negative
 
@@ -1187,6 +1286,7 @@ All three can be addressed by training only the FP16 components using the existi
 5. **Mixed-precision complexity**: Router (FP16) + experts (ternary) + attention (FP16/ternary) adds dispatch complexity
 6. **WASM limitation**: Ternary lookup table kernels may not translate efficiently to WASM SIMD
 7. **RLM scale gap**: Existing `RealContrastiveTrainer` targets 0.5B models (embedding_dim=896); scaling to 30B requires distributed data loading and increased batch sizes
+8. **No x86 SIMD kernels**: Current `kernels/matmul.rs` only implements NEON (aarch64); x86 falls to scalar fallback (~3-5x slower than NEON). Adding AVX2/AVX512 kernels would make x86 SIMD-only mode competitive but is not yet implemented
 
 ### Risks
 
@@ -1284,3 +1384,6 @@ All three can be addressed by training only the FP16 components using the existi
 21. STBLLM: "Breaking the 1-bit Barrier" (ICLR 2025) — https://proceedings.iclr.cc/paper_files/paper/2025/file/ff997469ac66cf893c4183efeb22212a-Paper-Conference.pdf
 22. Apple Mac Studio Technical Specifications (2025) — https://www.apple.com/mac-studio/specs/
 23. RuvLLM Metal GEMV integration: `crates/ruvllm/src/kernels/matmul.rs:1444-1582`
+24. RuvLLM MicroLoRA NEON SIMD forward: `crates/ruvllm/src/lora/micro_lora.rs:279-390` (forward_simd, forward_simd_neon_impl)
+25. RuvLLM NEON SIMD kernels: `crates/ruvllm/src/kernels/` (matmul: gemm_neon/gemv_neon, activations: silu_neon/gelu_neon/relu_neon, norm: rms_norm_neon, rope: apply_rope_neon)
+26. RuvLLM ContrastiveTrainer CPU fallback: `crates/ruvllm/src/training/contrastive.rs:171-175` (Metal → CPU fallback) and `contrastive.rs:475` (non-Candle pure CPU path)

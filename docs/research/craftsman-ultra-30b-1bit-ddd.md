@@ -1,6 +1,6 @@
 # Domain-Driven Design: Craftsman Ultra 30b 1bit
 
-**Version:** 2.2
+**Version:** 2.3
 **Date:** 2026-02-03
 **Relates to:** ADR-017-craftsman-ultra-30b-1bit-bitnet-integration
 **Status:** Research / Pre-Implementation
@@ -84,6 +84,9 @@ The following terms have precise meaning within the Craftsman Ultra domain. All 
 | **Frozen Ternary** | Expert FFN weights locked to their PTQ {-1,0,+1} values during Phase 0.5 refinement — not differentiable, not modified. |
 | **LoRA Correction** | Small FP16 additive output from MicroLoRA that compensates for ternary quantization error: `Y = BitLinear(X) + LoRA(X)`. |
 | **Router Repair** | Contrastive fine-tuning of FP16 router weights to correct misrouting caused by expert output distribution changes after PTQ. |
+| **SIMD-Only Mode** | Phase 0.5 execution mode where all training runs on pure CPU SIMD (NEON on aarch64) without Metal GPU. All RLM components are GPU-agnostic except ContrastiveTrainer which has an explicit CPU fallback path. ~2-3x slower than Metal but extends platform support beyond macOS. |
+| **NEON Intrinsics** | ARM SIMD instruction set used by MicroLoRA's `forward_simd_neon_impl()` for 8x-unrolled forward passes. Available on all Apple Silicon and ARM64 platforms. x86 platforms fall to scalar fallback. |
+| **Scalar Fallback** | Platform-agnostic non-SIMD code path used when NEON (aarch64) is unavailable. Provides identical results at ~3-5x lower throughput. Enables Phase 0.5 on x86 Linux/Windows. |
 
 ---
 
@@ -548,7 +551,7 @@ The RLM Training Orchestration Context operates in a **lightweight refinement mo
 | `ContrastiveTrainer` | Router validation | **Router repair** |
 | `GrpoOptimizer` | Per-expert distillation reward | **Scale factor optimization reward** |
 | `EwcRegularizer` | Cross-expert stability | **Cross-step stability** |
-| Platform | Cloud GPU (4× A100) | **Mac Studio (Metal)** |
+| Platform | Cloud GPU (4× A100) | **Mac Studio (Metal or SIMD-only)** |
 | Cost | $1,300+ | **$0** |
 | New code | ~30% new | **~0% new** (only thin orchestrator) |
 
@@ -939,7 +942,7 @@ Assuming GLM-4.7-Flash architecture with ~3B active parameters per token:
 
 ## 8.5 Training Infrastructure Model
 
-### Why Not Local CPU/SIMD
+### Why Not Local CPU/SIMD (for Phase 1+)
 
 The existing RuvLLM SIMD kernels (`crates/ruvllm/src/kernels/`) are **inference-only** — no backward pass, no gradient computation, no training support. The training code paths are:
 
@@ -947,7 +950,34 @@ The existing RuvLLM SIMD kernels (`crates/ruvllm/src/kernels/`) are **inference-
 - `EwcRegularizer` / LoRA training: Pure CPU via `ndarray` (no GPU acceleration)
 - SIMD kernels: Forward-pass optimizations only (flash attention, matmul, activations)
 
-At ~50-100 training tok/s on CPU, 200B tokens would require ~65 years. Not viable.
+At ~50-100 training tok/s on CPU, 200B tokens would require ~65 years. Not viable for Phase 1+.
+
+### Why SIMD-Only Works (for Phase 0.5)
+
+Phase 0.5 is fundamentally different from Phase 1+: it trains only ~200-400M FP16 parameters (1-2% of 30B) using existing RLM components that are already pure ndarray/CPU. The SIMD kernels are used for the forward pass through the frozen model to compute training loss, not for gradient computation.
+
+**GPU dependency analysis of Phase 0.5 components:**
+
+| Component | GPU Required? | SIMD Benefit |
+|-----------|--------------|-------------|
+| MicroLoRA forward pass | No — `forward_simd()` uses NEON intrinsics directly | ~3-4x over scalar |
+| MicroLoRA gradient computation | No — pure ndarray `apply_gradients()` | None (ndarray handles) |
+| TrainingPipeline | No — pure ndarray | None |
+| EwcRegularizer | No — pure ndarray | None |
+| GrpoOptimizer | No — pure ndarray | None |
+| ContrastiveTrainer | Optional — `use_metal: false` forces CPU | Candle CPU tensors |
+| Frozen model forward (loss computation) | No — SIMD inference kernels | NEON GEMM/GEMV ~3x |
+
+**Effective training throughput (SIMD-only, 100M-500M tokens):**
+
+| Platform | SIMD | tok/s | 100M tokens | Feasible? |
+|----------|------|-------|-------------|-----------|
+| Mac Studio M4 Max | NEON | ~100-300 | 4-12 days | **Yes** |
+| Mac Studio M3 Ultra | NEON | ~150-400 | 3-8 days | **Yes** |
+| Linux ARM64 (Graviton3) | NEON | ~80-200 | 6-14 days | **Yes** |
+| Linux x86 (Ryzen 9) | Scalar | ~30-80 | 14-39 days | **Marginal** |
+
+**Platform gap**: No AVX2/AVX512 SIMD kernels exist in `kernels/matmul.rs` — only `target_arch = "aarch64"` (NEON) vs scalar dispatch. x86 therefore falls to scalar, making it ~3-5x slower than NEON. Adding AVX2 kernels is an identified future improvement (see ADR-017 AD-20).
 
 ### Cloud GPU Distillation Strategy
 
@@ -987,10 +1017,12 @@ Expert FFN (~1B params):
 
 | Task | Location | Device | Duration |
 |------|----------|--------|----------|
+| **Phase 0.5 RLM refinement (Metal)** | **Mac Studio** | **Metal GPU + CPU ndarray** | **3-14 days** |
+| **Phase 0.5 RLM refinement (SIMD-only)** | **Mac Studio or Linux ARM64** | **NEON SIMD + CPU ndarray** | **4-24 days** |
 | Expert distillation (Phase 1) | GCP 4×A100 spot | CUDA | ~46 days |
-| Router contrastive validation | GCP 1×A100 or local Mac | CUDA/Metal | Hours |
+| Router contrastive validation | GCP 1×A100 or local Mac | CUDA/Metal/CPU | Hours |
 | Inference benchmark (TL1/TL2) | Local workstation | CPU SIMD (AVX2/NEON) | Minutes |
-| MicroLoRA adaptation | Local / edge | CPU (ndarray) | <1ms/update |
+| MicroLoRA adaptation | Local / edge | CPU (ndarray + NEON SIMD) | <1ms/update |
 | GGUF export | Local | CPU | Minutes |
 | Kernel correctness tests | Local | CPU SIMD | Seconds |
 
@@ -1089,6 +1121,9 @@ All changes are additive. No existing backend, model, or API is modified. The `B
 | 15 | Optimal MicroLoRA rank for Phase 0.5? | Quality vs speed | Open | Rank-1 is faster, rank-2 is 5% faster due to SIMD but has 2× params. Empirical testing needed. |
 | 16 | LoRA adapter persistence in GGUF? | Export format | Open | Store LoRA A/B matrices as separate tensors in GGUF, or merge into ternary+FP16 hybrid format? |
 | 17 | Phase 0.5 LoRA → Phase 1 distillation init? | Continuity | Open | Can Phase 0.5 LoRA corrections inform Phase 1 shadow weight initialization for faster convergence? |
+| 18 | Add AVX2/AVX512 SIMD kernels to `matmul.rs`? | x86 SIMD-only performance | Open | Current kernels only have NEON (aarch64) + scalar fallback. Adding AVX2 would make x86 SIMD-only Phase 0.5 ~3-5x faster. Is it worth the effort vs just using ARM? |
+| 19 | SIMD-only vs Metal quality equivalence? | Phase 0.5 validation | Open | Does ContrastiveTrainer produce identical router accuracy on CPU vs Metal? Need empirical comparison to confirm no numerical divergence. |
+| 20 | Cloud ARM64 instances for SIMD-only Phase 0.5? | Platform portability | Open | AWS Graviton3/4 or Ampere Altra instances with 128+ GB RAM could run SIMD-only Phase 0.5 without Mac Studio. Cost-competitive? |
 
 ---
 
@@ -1111,3 +1146,6 @@ All changes are additive. No existing backend, model, or API is modified. The `B
 - BitDistill: "BitNet Distillation" (arXiv:2510.13998, Oct 2025)
 - bartowski, GLM-4.7-Flash-GGUF quantizations: https://huggingface.co/bartowski/zai-org_GLM-4.7-Flash-GGUF
 - llama.cpp IQ1_S blind testing: https://github.com/ggml-org/llama.cpp/discussions/5962
+- RuvLLM MicroLoRA NEON SIMD: `crates/ruvllm/src/lora/micro_lora.rs:279-390`
+- RuvLLM NEON SIMD kernels: `crates/ruvllm/src/kernels/` (gemm_neon, gemv_neon, silu_neon, gelu_neon, relu_neon, rms_norm_neon, apply_rope_neon)
+- RuvLLM ContrastiveTrainer CPU fallback: `crates/ruvllm/src/training/contrastive.rs:171-175`
