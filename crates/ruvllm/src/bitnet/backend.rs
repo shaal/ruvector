@@ -26,12 +26,15 @@ use std::path::Path;
 
 use crate::backends::{
     GenerateParams, GeneratedToken, LlmBackend, ModelArchitecture, ModelConfig,
-    ModelInfo, Quantization, StreamEvent, TokenStream, Tokenizer,
+    ModelInfo, Quantization, StreamEvent, TokenStream,
+    Tokenizer as BackendTokenizer,
+    SpecialTokens as BackendSpecialTokens,
 };
 use crate::error::{Result, RuvLLMError};
 use crate::gguf::{GgufFile, GgufQuantType};
 
 use super::ternary_tensor::TernaryTensor;
+use super::tokenizer::{BpeTokenizer, SpecialTokens as BitNetSpecialTokens};
 
 // ============================================================================
 // Configuration
@@ -130,6 +133,19 @@ struct ExpertWeights {
     down_proj: TernaryTensor,
 }
 
+/// Attention projection weights (ternary).
+#[derive(Debug, Clone)]
+struct AttentionWeights {
+    /// Q projection: [num_heads * head_dim, hidden_size]
+    q_proj: TernaryTensor,
+    /// K projection: [num_kv_heads * head_dim, hidden_size]
+    k_proj: TernaryTensor,
+    /// V projection: [num_kv_heads * head_dim, hidden_size]
+    v_proj: TernaryTensor,
+    /// Output projection: [hidden_size, num_heads * head_dim]
+    o_proj: TernaryTensor,
+}
+
 /// Weights for a single transformer layer.
 #[derive(Debug, Clone)]
 struct TransformerLayer {
@@ -137,10 +153,43 @@ struct TransformerLayer {
     input_norm_weight: Vec<f32>,
     /// Post-attention RMSNorm weight [hidden_size]
     post_attn_norm_weight: Vec<f32>,
+    /// Attention projection weights (ternary)
+    attention: AttentionWeights,
     /// MoE router gate weight [num_experts, hidden_size] (FP32, stored row-major)
     gate_weight: Vec<f32>,
     /// Per-expert FFN weights (ternary)
     experts: Vec<ExpertWeights>,
+}
+
+// ============================================================================
+// KV Cache
+// ============================================================================
+
+/// Per-layer KV cache for autoregressive generation.
+#[derive(Debug, Clone)]
+struct LayerKvCache {
+    /// Cached key vectors: one [num_kv_heads * head_dim] per position
+    keys: Vec<Vec<f32>>,
+    /// Cached value vectors: one [num_kv_heads * head_dim] per position
+    values: Vec<Vec<f32>>,
+}
+
+impl LayerKvCache {
+    fn new() -> Self {
+        Self {
+            keys: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.keys.clear();
+        self.values.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.keys.len()
+    }
 }
 
 // ============================================================================
@@ -177,6 +226,13 @@ pub struct BitNetBackend {
     layers: Vec<TransformerLayer>,
     /// Pre-computed TL1 lookup table
     tl1_lut: Tl1Lut,
+    /// Per-layer KV caches for autoregressive generation
+    kv_caches: Vec<LayerKvCache>,
+    /// Tokenizer (loaded from GGUF or byte-level fallback)
+    tok: Option<BpeTokenizer>,
+    /// Pre-computed RoPE cos/sin tables [max_context, head_dim/2]
+    rope_cos: Vec<f32>,
+    rope_sin: Vec<f32>,
     /// Whether a model is loaded
     loaded: bool,
     /// Model path (for info)
@@ -193,8 +249,19 @@ impl BitNetBackend {
             final_norm_weight: Vec::new(),
             layers: Vec::new(),
             tl1_lut: build_tl1_lut(),
+            kv_caches: Vec::new(),
+            tok: None,
+            rope_cos: Vec::new(),
+            rope_sin: Vec::new(),
             loaded: false,
             model_path: String::new(),
+        }
+    }
+
+    /// Clear the KV cache (call between sequences).
+    pub fn reset_cache(&mut self) {
+        for cache in &mut self.kv_caches {
+            cache.clear();
         }
     }
 
@@ -237,11 +304,94 @@ impl BitNetBackend {
             self.layers.push(layer);
         }
 
+        // Initialize KV caches (one per layer)
+        self.kv_caches = (0..config.num_layers).map(|_| LayerKvCache::new()).collect();
+
+        // Build RoPE cos/sin tables
+        let head_dim = config.hidden_size / config.num_attention_heads;
+        self.build_rope_tables(config.max_context, head_dim, config.rope_theta);
+
+        // Load tokenizer from GGUF metadata
+        self.tok = self.load_tokenizer_from_gguf(&gguf);
+
         self.config = Some(config);
         self.loaded = true;
         self.model_path = path.to_string();
 
         Ok(())
+    }
+
+    /// Pre-compute RoPE frequency tables.
+    fn build_rope_tables(&mut self, max_seq: usize, head_dim: usize, theta: f32) {
+        let half = head_dim / 2;
+        let total = max_seq * half;
+        self.rope_cos = vec![0.0; total];
+        self.rope_sin = vec![0.0; total];
+
+        for pos in 0..max_seq {
+            for i in 0..half {
+                let freq = 1.0 / theta.powf(2.0 * i as f32 / head_dim as f32);
+                let angle = pos as f32 * freq;
+                self.rope_cos[pos * half + i] = angle.cos();
+                self.rope_sin[pos * half + i] = angle.sin();
+            }
+        }
+    }
+
+    /// Load tokenizer from GGUF metadata, falling back to byte-level tokenizer.
+    fn load_tokenizer_from_gguf(&self, gguf: &GgufFile) -> Option<BpeTokenizer> {
+        // Try to extract token list from GGUF
+        let tokens_meta = gguf.metadata.get("tokenizer.ggml.tokens");
+        let merges_meta = gguf.metadata.get("tokenizer.ggml.merges");
+
+        if let Some(tokens_arr) = tokens_meta.and_then(|v| v.as_array()) {
+            let vocab: Vec<String> = tokens_arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+
+            let merges: Vec<(String, String)> = if let Some(merges_arr) =
+                merges_meta.and_then(|v| v.as_array())
+            {
+                merges_arr
+                    .iter()
+                    .filter_map(|v| {
+                        let s = v.as_str()?;
+                        let mut parts = s.splitn(2, ' ');
+                        let left = parts.next()?.to_string();
+                        let right = parts.next()?.to_string();
+                        Some((left, right))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            if !vocab.is_empty() {
+                return Some(BpeTokenizer::from_vocab(
+                    vocab,
+                    merges,
+                    BitNetSpecialTokens::default(),
+                ));
+            }
+        }
+
+        // Fallback: construct a byte-level tokenizer (260 tokens)
+        Some(Self::build_byte_level_tokenizer())
+    }
+
+    /// Build a minimal byte-level tokenizer for when GGUF has no vocab.
+    fn build_byte_level_tokenizer() -> BpeTokenizer {
+        let mut vocab = vec![
+            "<PAD>".to_string(), // 0
+            "<BOS>".to_string(), // 1
+            "<EOS>".to_string(), // 2
+            "<UNK>".to_string(), // 3
+        ];
+        for b in 0..=255u8 {
+            vocab.push(format!("<{:02X}>", b));
+        }
+        BpeTokenizer::from_vocab(vocab, vec![], BitNetSpecialTokens::default())
     }
 
     /// Extract BitNetModelConfig from GGUF metadata.
@@ -402,6 +552,32 @@ impl BitNetBackend {
             config,
         )?;
 
+        // Attention projections (ternary)
+        let attn_prefix = format!("{}.self_attn", prefix);
+        let q_proj = self.load_ternary_tensor(
+            gguf,
+            &format!("{}.q_proj.weight", attn_prefix),
+        )?;
+        let k_proj = self.load_ternary_tensor(
+            gguf,
+            &format!("{}.k_proj.weight", attn_prefix),
+        )?;
+        let v_proj = self.load_ternary_tensor(
+            gguf,
+            &format!("{}.v_proj.weight", attn_prefix),
+        )?;
+        let o_proj = self.load_ternary_tensor(
+            gguf,
+            &format!("{}.o_proj.weight", attn_prefix),
+        )?;
+
+        let attention = AttentionWeights {
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
+        };
+
         // MoE router gate (FP16/FP32): [num_experts, hidden_size]
         let gate_weight = self.load_fp_tensor(
             gguf,
@@ -438,6 +614,7 @@ impl BitNetBackend {
         Ok(TransformerLayer {
             input_norm_weight,
             post_attn_norm_weight,
+            attention,
             gate_weight,
             experts,
         })
@@ -447,44 +624,42 @@ impl BitNetBackend {
     // Forward Pass
     // ========================================================================
 
-    /// Run the full forward pass, returning logits for the last token.
+    /// Run a forward pass for a single token, using the KV cache.
+    ///
+    /// This is the autoregressive path: embed one token, run all layers
+    /// with cached K/V from prior positions, return logits.
+    ///
+    /// Call `reset_cache()` before starting a new sequence.
     ///
     /// # Arguments
     ///
-    /// * `token_ids` - Input token ID sequence
-    ///
-    /// # Returns
-    ///
-    /// Logits vector of length `vocab_size`
-    pub fn forward(&self, token_ids: &[u32]) -> Result<Vec<f32>> {
+    /// * `token_id` - Single token to process
+    /// * `position` - Position index in the sequence (0-based)
+    pub fn forward_token(&mut self, token_id: u32, position: usize) -> Result<Vec<f32>> {
         let config = self.config.as_ref().ok_or_else(|| {
             RuvLLMError::Model("No model loaded".to_string())
-        })?;
-
-        if token_ids.is_empty() {
-            return Err(RuvLLMError::Model("Empty token sequence".to_string()));
-        }
+        })?.clone();
 
         let hidden = config.hidden_size;
 
-        // Embedding lookup: take last token for single-token generation
-        let last_token = *token_ids.last().unwrap() as usize;
-        if last_token >= config.vocab_size {
+        if (token_id as usize) >= config.vocab_size {
             return Err(RuvLLMError::Model(format!(
                 "Token ID {} exceeds vocab size {}",
-                last_token, config.vocab_size
+                token_id, config.vocab_size
             )));
         }
-        let mut hidden_states: Vec<f32> =
-            self.embedding[last_token * hidden..(last_token + 1) * hidden].to_vec();
+
+        // Embedding lookup
+        let start = (token_id as usize) * hidden;
+        let mut hidden_states: Vec<f32> = self.embedding[start..start + hidden].to_vec();
 
         // Transformer layers
-        for (layer_idx, layer) in self.layers.iter().enumerate() {
-            hidden_states = self.forward_layer(
+        for layer_idx in 0..self.layers.len() {
+            hidden_states = self.forward_layer_cached(
                 &hidden_states,
-                layer,
                 layer_idx,
-                config,
+                position,
+                &config,
             )?;
         }
 
@@ -502,62 +677,247 @@ impl BitNetBackend {
         Ok(logits)
     }
 
-    /// Forward pass through a single transformer layer.
-    fn forward_layer(
-        &self,
+    /// Legacy forward: process full token sequence without KV cache.
+    /// Kept for backwards compatibility with tests.
+    pub fn forward(&self, token_ids: &[u32]) -> Result<Vec<f32>> {
+        let config = self.config.as_ref().ok_or_else(|| {
+            RuvLLMError::Model("No model loaded".to_string())
+        })?;
+
+        if token_ids.is_empty() {
+            return Err(RuvLLMError::Model("Empty token sequence".to_string()));
+        }
+
+        let hidden = config.hidden_size;
+        let last_token = *token_ids.last().unwrap() as usize;
+        if last_token >= config.vocab_size {
+            return Err(RuvLLMError::Model(format!(
+                "Token ID {} exceeds vocab size {}",
+                last_token, config.vocab_size
+            )));
+        }
+        let mut hidden_states: Vec<f32> =
+            self.embedding[last_token * hidden..(last_token + 1) * hidden].to_vec();
+
+        for (_layer_idx, layer) in self.layers.iter().enumerate() {
+            hidden_states = self.forward_layer_nocache(
+                &hidden_states,
+                layer,
+                config,
+            )?;
+        }
+
+        rms_norm_inplace(&mut hidden_states, &self.final_norm_weight, 1e-6);
+
+        let logits = fp32_matvec_transposed(
+            &self.lm_head,
+            &hidden_states,
+            config.vocab_size,
+            hidden,
+        );
+
+        Ok(logits)
+    }
+
+    /// Forward pass through a single layer with KV cache (autoregressive).
+    fn forward_layer_cached(
+        &mut self,
         input: &[f32],
-        layer: &TransformerLayer,
-        _layer_idx: usize,
+        layer_idx: usize,
+        position: usize,
         config: &BitNetModelConfig,
     ) -> Result<Vec<f32>> {
         let hidden = config.hidden_size;
+        let num_heads = config.num_attention_heads;
+        let num_kv_heads = config.num_kv_heads;
+        let head_dim = hidden / num_heads;
+        let kv_dim = num_kv_heads * head_dim;
 
         // --- Pre-attention norm ---
         let mut normed = input.to_vec();
+        let layer = &self.layers[layer_idx];
         rms_norm_inplace(&mut normed, &layer.input_norm_weight, 1e-6);
 
-        // --- Attention (Phase 0 placeholder: pass-through) ---
-        // In Phase 1 this would compute Q/K/V projections, RoPE, and causal attention.
-        let attn_out = normed;
+        // --- Q/K/V projections via TL1 GEMV ---
+        let q = self.tl1_gemv(&self.layers[layer_idx].attention.q_proj, &normed, hidden, hidden);
+        let k = self.tl1_gemv(&self.layers[layer_idx].attention.k_proj, &normed, kv_dim, hidden);
+        let v = self.tl1_gemv(&self.layers[layer_idx].attention.v_proj, &normed, kv_dim, hidden);
+
+        // --- Apply RoPE to Q and K ---
+        let mut q_rope = q;
+        let mut k_rope = k.clone();
+        self.apply_rope(&mut q_rope, num_heads, head_dim, position);
+        self.apply_rope(&mut k_rope, num_kv_heads, head_dim, position);
+
+        // --- Update KV cache ---
+        self.kv_caches[layer_idx].keys.push(k_rope);
+        self.kv_caches[layer_idx].values.push(v);
+        let seq_len = self.kv_caches[layer_idx].len();
+
+        // --- GQA Attention ---
+        let gqa_groups = num_heads / num_kv_heads;
+        let inv_sqrt_d = 1.0 / (head_dim as f32).sqrt();
+        let mut attn_out = vec![0.0f32; hidden];
+
+        for h in 0..num_heads {
+            let kv_head = h / gqa_groups;
+            let q_offset = h * head_dim;
+
+            // Compute attention scores for this head across all cached positions
+            let mut scores = Vec::with_capacity(seq_len);
+            for pos in 0..seq_len {
+                let k_offset = kv_head * head_dim;
+                let k_vec = &self.kv_caches[layer_idx].keys[pos];
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q_rope[q_offset + d] * k_vec[k_offset + d];
+                }
+                scores.push(dot * inv_sqrt_d);
+            }
+
+            // Causal mask is implicit: we only have positions <= current
+            // Softmax over scores
+            softmax_inplace(&mut scores);
+
+            // Weighted sum of V
+            for pos in 0..seq_len {
+                let v_offset = kv_head * head_dim;
+                let v_vec = &self.kv_caches[layer_idx].values[pos];
+                let w = scores[pos];
+                for d in 0..head_dim {
+                    attn_out[q_offset + d] += w * v_vec[v_offset + d];
+                }
+            }
+        }
+
+        // --- Output projection ---
+        let o_proj = self.tl1_gemv(
+            &self.layers[layer_idx].attention.o_proj,
+            &attn_out,
+            hidden,
+            hidden,
+        );
 
         // --- Residual after attention ---
-        let mut residual: Vec<f32> = input
-            .iter()
-            .zip(attn_out.iter())
-            .map(|(r, a)| r + a)
-            .collect();
+        let mut residual: Vec<f32> = input.iter().zip(o_proj.iter()).map(|(r, a)| r + a).collect();
 
         // --- Post-attention norm ---
         let mut normed_ffn = residual.clone();
+        let layer = &self.layers[layer_idx];
         rms_norm_inplace(&mut normed_ffn, &layer.post_attn_norm_weight, 1e-6);
 
-        // --- MoE routing ---
+        // --- MoE ---
         let (expert_indices, expert_weights) =
             self.route_experts(&normed_ffn, &layer.gate_weight, config)?;
 
-        // --- Expert forward + weighted sum ---
         let mut moe_output = vec![0.0f32; hidden];
         for (&eidx, &eweight) in expert_indices.iter().zip(expert_weights.iter()) {
             if eidx >= layer.experts.len() {
                 return Err(RuvLLMError::Model(format!(
                     "Expert index {} out of bounds (layer has {} experts)",
-                    eidx,
-                    layer.experts.len()
+                    eidx, layer.experts.len()
                 )));
             }
-            let expert_out =
-                self.expert_forward(&normed_ffn, &layer.experts[eidx], config)?;
+            let expert_out = self.expert_forward(&normed_ffn, &self.layers[layer_idx].experts[eidx], config)?;
             for (o, &e) in moe_output.iter_mut().zip(expert_out.iter()) {
                 *o += eweight * e;
             }
         }
 
-        // --- Residual after MoE ---
         for (r, &m) in residual.iter_mut().zip(moe_output.iter()) {
             *r += m;
         }
 
         Ok(residual)
+    }
+
+    /// Forward pass through a single layer WITHOUT KV cache (legacy path).
+    fn forward_layer_nocache(
+        &self,
+        input: &[f32],
+        layer: &TransformerLayer,
+        config: &BitNetModelConfig,
+    ) -> Result<Vec<f32>> {
+        let hidden = config.hidden_size;
+
+        let mut normed = input.to_vec();
+        rms_norm_inplace(&mut normed, &layer.input_norm_weight, 1e-6);
+
+        // Attention: Q/K/V projections, single-position self-attention (degenerates to
+        // identity-like behavior for 1 position but at least runs the projection weights)
+        let num_heads = config.num_attention_heads;
+        let head_dim = hidden / num_heads;
+        let kv_dim = config.num_kv_heads * head_dim;
+
+        let q = self.tl1_gemv(&layer.attention.q_proj, &normed, hidden, hidden);
+        let k = self.tl1_gemv(&layer.attention.k_proj, &normed, kv_dim, hidden);
+        let v = self.tl1_gemv(&layer.attention.v_proj, &normed, kv_dim, hidden);
+
+        // Single-position attention: softmax([score]) = [1.0], so output = V expanded to all heads
+        let gqa_groups = num_heads / config.num_kv_heads;
+        let mut attn_concat = vec![0.0f32; hidden];
+        for h in 0..num_heads {
+            let kv_head = h / gqa_groups;
+            for d in 0..head_dim {
+                attn_concat[h * head_dim + d] = v[kv_head * head_dim + d];
+            }
+        }
+        // Suppress unused warning — q and k are computed to exercise the projections
+        let _ = q;
+        let _ = k;
+
+        let o_out = self.tl1_gemv(&layer.attention.o_proj, &attn_concat, hidden, hidden);
+
+        let mut residual: Vec<f32> = input.iter().zip(o_out.iter()).map(|(r, a)| r + a).collect();
+
+        let mut normed_ffn = residual.clone();
+        rms_norm_inplace(&mut normed_ffn, &layer.post_attn_norm_weight, 1e-6);
+
+        let (expert_indices, expert_weights) =
+            self.route_experts(&normed_ffn, &layer.gate_weight, config)?;
+
+        let mut moe_output = vec![0.0f32; hidden];
+        for (&eidx, &eweight) in expert_indices.iter().zip(expert_weights.iter()) {
+            if eidx >= layer.experts.len() {
+                return Err(RuvLLMError::Model(format!(
+                    "Expert index {} out of bounds (layer has {} experts)",
+                    eidx, layer.experts.len()
+                )));
+            }
+            let expert_out = self.expert_forward(&normed_ffn, &layer.experts[eidx], config)?;
+            for (o, &e) in moe_output.iter_mut().zip(expert_out.iter()) {
+                *o += eweight * e;
+            }
+        }
+
+        for (r, &m) in residual.iter_mut().zip(moe_output.iter()) {
+            *r += m;
+        }
+
+        Ok(residual)
+    }
+
+    /// Apply Rotary Position Embedding (RoPE) in-place.
+    ///
+    /// For each head, rotates pairs of dimensions (2i, 2i+1) by position-dependent angles.
+    fn apply_rope(&self, x: &mut [f32], num_heads: usize, head_dim: usize, position: usize) {
+        let half = head_dim / 2;
+        let max_seq = self.rope_cos.len() / half;
+        if position >= max_seq {
+            return; // Beyond pre-computed tables — skip RoPE
+        }
+        let cos_base = position * half;
+        for h in 0..num_heads {
+            let offset = h * head_dim;
+            for i in 0..half {
+                let cos_val = self.rope_cos[cos_base + i];
+                let sin_val = self.rope_sin[cos_base + i];
+                let x0 = x[offset + 2 * i];
+                let x1 = x[offset + 2 * i + 1];
+                x[offset + 2 * i] = x0 * cos_val - x1 * sin_val;
+                x[offset + 2 * i + 1] = x0 * sin_val + x1 * cos_val;
+            }
+        }
     }
 
     // ========================================================================
@@ -769,6 +1129,37 @@ impl BitNetBackend {
 // LlmBackend Trait Implementation
 // ============================================================================
 
+// ============================================================================
+// Tokenizer trait bridge
+// ============================================================================
+
+/// Wraps our BpeTokenizer to implement the crate-level Tokenizer trait.
+struct TokenizerBridge<'a> {
+    inner: &'a BpeTokenizer,
+}
+
+impl<'a> BackendTokenizer for TokenizerBridge<'a> {
+    fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        Ok(self.inner.encode(text))
+    }
+
+    fn decode(&self, tokens: &[u32]) -> Result<String> {
+        Ok(self.inner.decode(tokens))
+    }
+
+    fn vocab_size(&self) -> usize {
+        self.inner.vocab_size()
+    }
+
+    fn special_tokens(&self) -> BackendSpecialTokens {
+        BackendSpecialTokens {
+            bos_token_id: Some(1),
+            eos_token_id: Some(2),
+            ..Default::default()
+        }
+    }
+}
+
 impl LlmBackend for BitNetBackend {
     fn load_model(&mut self, model_id: &str, _config: ModelConfig) -> Result<()> {
         self.load_gguf(model_id)
@@ -779,18 +1170,26 @@ impl LlmBackend for BitNetBackend {
             return Err(RuvLLMError::Model("No model loaded".to_string()));
         }
 
-        // Phase 0: simple greedy decode with hardcoded token IDs
-        // A real implementation would use the tokenizer to encode the prompt.
-        // For smoke testing, treat prompt bytes as token IDs.
-        let mut tokens: Vec<u32> = prompt.bytes().map(|b| b as u32).collect();
+        let tokenizer = self.tok.as_ref().ok_or_else(|| {
+            RuvLLMError::Model("No tokenizer loaded".to_string())
+        })?;
+
+        // Encode prompt via tokenizer
+        let prompt_tokens = tokenizer.encode(prompt);
+        let eos_id = 2u32;
+
+        // Autoregressive generation using forward_token with KV cache.
+        // Since generate() takes &self (not &mut self), we use the legacy
+        // full-sequence forward path here. Use generate_mut() for KV-cached
+        // generation.
+        let mut tokens = prompt_tokens;
         let mut generated = Vec::new();
 
         for _ in 0..params.max_tokens {
             let logits = self.forward(&tokens)?;
             let next_token = Self::argmax(&logits);
 
-            // Simple EOS check (token 0 or 2 are common EOS)
-            if next_token == 0 || next_token == 2 {
+            if next_token == eos_id || next_token == 0 {
                 break;
             }
 
@@ -798,13 +1197,8 @@ impl LlmBackend for BitNetBackend {
             tokens.push(next_token);
         }
 
-        // Phase 0: return token IDs as string (no real tokenizer)
-        let text: String = generated
-            .iter()
-            .map(|&t| format!("[{}]", t))
-            .collect::<Vec<_>>()
-            .join("");
-
+        // Decode generated tokens back to text
+        let text = tokenizer.decode(&generated);
         Ok(text)
     }
 
@@ -813,7 +1207,6 @@ impl LlmBackend for BitNetBackend {
         prompt: &str,
         params: GenerateParams,
     ) -> Result<Box<dyn Iterator<Item = Result<GeneratedToken>> + Send + '_>> {
-        // Delegate to non-streaming generate for Phase 0
         let result = self.generate(prompt, params)?;
         let tokens: Vec<Result<GeneratedToken>> = result
             .chars()
@@ -856,14 +1249,41 @@ impl LlmBackend for BitNetBackend {
         Ok(stream)
     }
 
-    fn get_embeddings(&self, _text: &str) -> Result<Vec<f32>> {
-        Err(RuvLLMError::NotImplemented(
-            "BitNetBackend embeddings not yet supported".to_string(),
-        ))
+    fn get_embeddings(&self, text: &str) -> Result<Vec<f32>> {
+        let config = self.config.as_ref().ok_or_else(|| {
+            RuvLLMError::Model("No model loaded".to_string())
+        })?;
+        let tokenizer = self.tok.as_ref().ok_or_else(|| {
+            RuvLLMError::Model("No tokenizer loaded".to_string())
+        })?;
+
+        let ids = tokenizer.encode(text);
+        if ids.is_empty() {
+            return Err(RuvLLMError::Model("Empty token sequence".to_string()));
+        }
+
+        // Use last token embedding as text representation
+        let last_id = *ids.last().unwrap() as usize;
+        let hidden = config.hidden_size;
+        if last_id >= config.vocab_size {
+            return Err(RuvLLMError::Model("Token exceeds vocab".to_string()));
+        }
+        Ok(self.embedding[last_id * hidden..(last_id + 1) * hidden].to_vec())
     }
 
-    fn tokenizer(&self) -> Option<&dyn Tokenizer> {
-        None // Phase 0: no tokenizer
+    fn tokenizer(&self) -> Option<&dyn BackendTokenizer> {
+        self.tok.as_ref().map(|t| {
+            // Safety: we return a reference with the same lifetime as &self.
+            // The TokenizerBridge is a thin wrapper — we use a raw pointer trick
+            // to avoid the borrow checker issue with returning a trait object
+            // that borrows from self.
+            //
+            // Alternative: store a Box<dyn BackendTokenizer> directly. For now,
+            // return None and callers should use `self.tok` directly.
+            let _ = t;
+            // Return None for the trait-object path; callers can use tok() accessor
+            None::<&dyn BackendTokenizer>
+        }).flatten()
     }
 
     fn is_model_loaded(&self) -> bool {
@@ -874,17 +1294,17 @@ impl LlmBackend for BitNetBackend {
         let config = self.config.as_ref()?;
         Some(ModelInfo {
             name: self.model_path.clone(),
-            architecture: ModelArchitecture::Qwen, // Closest match for GLM-style MoE
+            architecture: ModelArchitecture::Qwen,
             num_parameters: config.num_layers
                 * config.num_experts
                 * config.intermediate_size
                 * config.hidden_size
-                * 3, // rough estimate
+                * 3,
             vocab_size: config.vocab_size,
             hidden_size: config.hidden_size,
             num_layers: config.num_layers,
             max_context_length: config.max_context,
-            quantization: Some(Quantization::Q2K), // ~2 bits/weight
+            quantization: Some(Quantization::Q2K),
             memory_usage: self.embedding.len() * 4
                 + self.lm_head.len() * 4
                 + self
@@ -894,6 +1314,10 @@ impl LlmBackend for BitNetBackend {
                         l.gate_weight.len() * 4
                             + l.input_norm_weight.len() * 4
                             + l.post_attn_norm_weight.len() * 4
+                            + l.attention.q_proj.memory_bytes()
+                            + l.attention.k_proj.memory_bytes()
+                            + l.attention.v_proj.memory_bytes()
+                            + l.attention.o_proj.memory_bytes()
                             + l.experts
                                 .iter()
                                 .map(|e| {
@@ -913,8 +1337,61 @@ impl LlmBackend for BitNetBackend {
         self.lm_head.clear();
         self.final_norm_weight.clear();
         self.layers.clear();
+        self.kv_caches.clear();
+        self.tok = None;
+        self.rope_cos.clear();
+        self.rope_sin.clear();
         self.loaded = false;
         self.model_path.clear();
+    }
+}
+
+impl BitNetBackend {
+    /// Autoregressive generate with KV cache (takes &mut self).
+    ///
+    /// This is the efficient path for generation: each token only computes
+    /// attention against cached K/V vectors rather than reprocessing the
+    /// full sequence.
+    pub fn generate_cached(&mut self, prompt: &str, max_tokens: usize) -> Result<String> {
+        if !self.loaded {
+            return Err(RuvLLMError::Model("No model loaded".to_string()));
+        }
+        let tokenizer = self.tok.as_ref().ok_or_else(|| {
+            RuvLLMError::Model("No tokenizer loaded".to_string())
+        })?;
+
+        let prompt_tokens = tokenizer.encode(prompt);
+        let eos_id = 2u32;
+
+        self.reset_cache();
+
+        // Prefill: process all prompt tokens
+        let mut last_logits = Vec::new();
+        for (pos, &tid) in prompt_tokens.iter().enumerate() {
+            last_logits = self.forward_token(tid, pos)?;
+        }
+
+        // Decode
+        let mut generated = Vec::new();
+        let mut pos = prompt_tokens.len();
+
+        for _ in 0..max_tokens {
+            let next_token = Self::argmax(&last_logits);
+            if next_token == eos_id || next_token == 0 {
+                break;
+            }
+            generated.push(next_token);
+            last_logits = self.forward_token(next_token, pos)?;
+            pos += 1;
+        }
+
+        let tokenizer = self.tok.as_ref().unwrap();
+        Ok(tokenizer.decode(&generated))
+    }
+
+    /// Get the loaded tokenizer (if any).
+    pub fn tok(&self) -> Option<&BpeTokenizer> {
+        self.tok.as_ref()
     }
 }
 
@@ -1211,5 +1688,138 @@ mod tests {
         let backend = BitNetBackend::new();
         assert!(!backend.is_model_loaded());
         assert!(backend.model_info().is_none());
+    }
+
+    #[test]
+    fn test_rope_tables() {
+        let mut backend = BitNetBackend::new();
+        backend.build_rope_tables(16, 8, 10000.0);
+
+        let half = 4; // head_dim / 2
+        // Position 0: all angles are 0 → cos=1, sin=0
+        for i in 0..half {
+            assert!((backend.rope_cos[i] - 1.0).abs() < 1e-5, "cos[0][{}]={}", i, backend.rope_cos[i]);
+            assert!(backend.rope_sin[i].abs() < 1e-5, "sin[0][{}]={}", i, backend.rope_sin[i]);
+        }
+
+        // Table size should be max_seq * half
+        assert_eq!(backend.rope_cos.len(), 16 * 4);
+        assert_eq!(backend.rope_sin.len(), 16 * 4);
+    }
+
+    #[test]
+    fn test_apply_rope_identity_at_pos_0() {
+        let mut backend = BitNetBackend::new();
+        backend.build_rope_tables(8, 4, 10000.0);
+
+        let mut x = vec![1.0, 2.0, 3.0, 4.0];
+        let original = x.clone();
+        backend.apply_rope(&mut x, 1, 4, 0);
+
+        // At position 0, all angles are 0, so cos=1, sin=0 → identity
+        for (a, b) in x.iter().zip(original.iter()) {
+            assert!((a - b).abs() < 1e-5, "RoPE at pos 0 should be identity: got {} vs {}", a, b);
+        }
+    }
+
+    #[test]
+    fn test_apply_rope_rotates_at_pos_1() {
+        let mut backend = BitNetBackend::new();
+        backend.build_rope_tables(8, 4, 10000.0);
+
+        let mut x = vec![1.0, 0.0, 1.0, 0.0]; // head_dim=4, 1 head
+        let original = x.clone();
+        backend.apply_rope(&mut x, 1, 4, 1);
+
+        // At position 1, some rotation should happen
+        let changed = x.iter().zip(original.iter()).any(|(a, b)| (a - b).abs() > 1e-6);
+        assert!(changed, "RoPE at pos 1 should rotate the vector");
+
+        // Norm should be preserved (RoPE is an orthogonal rotation)
+        let orig_norm: f32 = original.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let new_norm: f32 = x.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((orig_norm - new_norm).abs() < 1e-4, "RoPE should preserve norm");
+    }
+
+    #[test]
+    fn test_kv_cache_operations() {
+        let mut cache = LayerKvCache::new();
+        assert_eq!(cache.len(), 0);
+
+        cache.keys.push(vec![1.0, 2.0]);
+        cache.values.push(vec![3.0, 4.0]);
+        assert_eq!(cache.len(), 1);
+
+        cache.keys.push(vec![5.0, 6.0]);
+        cache.values.push(vec![7.0, 8.0]);
+        assert_eq!(cache.len(), 2);
+
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_byte_level_tokenizer() {
+        let tok = BitNetBackend::build_byte_level_tokenizer();
+        assert_eq!(tok.vocab_size(), 260); // 4 special + 256 byte tokens
+
+        // Roundtrip ASCII
+        let ids = tok.encode("Hello");
+        let decoded = tok.decode(&ids);
+        assert_eq!(decoded, "Hello", "Byte-level tokenizer roundtrip failed");
+
+        // BOS should be prepended
+        assert_eq!(ids[0], 1);
+    }
+
+    #[test]
+    fn test_byte_level_tokenizer_utf8() {
+        let tok = BitNetBackend::build_byte_level_tokenizer();
+        let text = "cafe\u{0301}"; // combining accent
+        let ids = tok.encode(text);
+        let decoded = tok.decode(&ids);
+        assert_eq!(decoded, text);
+    }
+
+    #[test]
+    fn test_backend_reset_cache() {
+        let mut backend = BitNetBackend::new();
+        // Manually set up caches
+        backend.kv_caches = vec![LayerKvCache::new(), LayerKvCache::new()];
+        backend.kv_caches[0].keys.push(vec![1.0]);
+        backend.kv_caches[1].keys.push(vec![2.0]);
+
+        backend.reset_cache();
+        assert_eq!(backend.kv_caches[0].len(), 0);
+        assert_eq!(backend.kv_caches[1].len(), 0);
+    }
+
+    #[test]
+    fn test_attention_weights_struct() {
+        // Just verify AttentionWeights can be constructed
+        let packed = pack_ternary(&[1, 0, -1, 0]);
+        let tensor = TernaryTensor {
+            packed_data: packed.clone(),
+            scales: vec![1.0],
+            shape: (1, 4),
+            block_size: 256,
+        };
+        let attn = AttentionWeights {
+            q_proj: tensor.clone(),
+            k_proj: tensor.clone(),
+            v_proj: tensor.clone(),
+            o_proj: tensor,
+        };
+        assert_eq!(attn.q_proj.shape, (1, 4));
+    }
+
+    #[test]
+    fn test_tok_accessor() {
+        let mut backend = BitNetBackend::new();
+        assert!(backend.tok().is_none());
+
+        backend.tok = Some(BitNetBackend::build_byte_level_tokenizer());
+        assert!(backend.tok().is_some());
+        assert_eq!(backend.tok().unwrap().vocab_size(), 260);
     }
 }
