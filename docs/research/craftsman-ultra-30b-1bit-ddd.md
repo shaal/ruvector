@@ -880,6 +880,72 @@ Assuming GLM-4.7-Flash architecture with ~3B active parameters per token:
 
 ---
 
+## 8.5 Training Infrastructure Model
+
+### Why Not Local CPU/SIMD
+
+The existing RuvLLM SIMD kernels (`crates/ruvllm/src/kernels/`) are **inference-only** — no backward pass, no gradient computation, no training support. The training code paths are:
+
+- `RealContrastiveTrainer`: Candle tensors on `Device::Metal` or `Device::Cpu` (no CUDA)
+- `EwcRegularizer` / LoRA training: Pure CPU via `ndarray` (no GPU acceleration)
+- SIMD kernels: Forward-pass optimizations only (flash attention, matmul, activations)
+
+At ~50-100 training tok/s on CPU, 200B tokens would require ~65 years. Not viable.
+
+### Cloud GPU Distillation Strategy
+
+**Per-expert distillation fits in a single A100 80GB:**
+
+```
+Expert FFN (~1B params):
+  Shadow weights (FP16):    2 GB
+  Gradients (FP32):         4 GB
+  AdamW state (2×FP32):     8 GB
+  Teacher activations:      1 GB
+  EWC++ Fisher:             0.5 GB
+  ────────────────────────────────
+  Total per expert:         ~15.5 GB  ✓ Fits A100 40GB
+```
+
+**Expert-parallel: 4 experts distill concurrently on 4× A100/H100:**
+
+```
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│   GPU 0      │  │   GPU 1      │  │   GPU 2      │  │   GPU 3      │
+│  Expert 0    │  │  Expert 1    │  │  Expert 2    │  │  Expert 3    │
+│  BitLinear   │  │  BitLinear   │  │  BitLinear   │  │  BitLinear   │
+│  + EWC       │  │  + EWC       │  │  + EWC       │  │  + EWC       │
+│  + GRPO      │  │  + GRPO      │  │  + GRPO      │  │  + GRPO      │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       │                 │                 │                 │
+       └─────────────────┴─────────────────┴─────────────────┘
+                                 │
+                    ┌────────────▼───────────┐
+                    │   Fisher Accumulation  │
+                    │   (cross-expert EWC)   │
+                    └────────────────────────┘
+```
+
+### What Runs Where
+
+| Task | Location | Device | Duration |
+|------|----------|--------|----------|
+| Expert distillation (Phase 1) | GCP 4×A100 spot | CUDA | ~46 days |
+| Router contrastive validation | GCP 1×A100 or local Mac | CUDA/Metal | Hours |
+| Inference benchmark (TL1/TL2) | Local workstation | CPU SIMD (AVX2/NEON) | Minutes |
+| MicroLoRA adaptation | Local / edge | CPU (ndarray) | <1ms/update |
+| GGUF export | Local | CPU | Minutes |
+| Kernel correctness tests | Local | CPU SIMD | Seconds |
+
+### Required Code Change
+
+Add CUDA device dispatch to `RealContrastiveTrainer` (`training/real_trainer.rs:178-184`):
+- New config field: `use_cuda: bool`, `cuda_device_id: usize`
+- Device selection: CUDA → Metal → CPU fallback chain
+- Existing `candle` + `cuda` Cargo features already available in `Cargo.toml`
+
+---
+
 ## 9. Testing Strategy
 
 ### Unit Tests (Per Context)

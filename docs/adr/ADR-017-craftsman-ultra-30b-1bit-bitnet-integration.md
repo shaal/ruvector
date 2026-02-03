@@ -721,6 +721,82 @@ let expert_results: Vec<DistillResult> = experts
     .collect();
 ```
 
+### AD-17: Training Infrastructure — Cloud GPU over Local SIMD
+
+**Decision**: Use Google Cloud A100/H100 GPU instances for distillation training. Reserve local CPU/SIMD for inference validation, MicroLoRA adaptation, and GGUF export only.
+
+**Rationale**: Local CPU/SIMD training is mathematically infeasible at the 200B+ token scale required for expert distillation. The existing RuvLLM SIMD kernels (`kernels/`) are inference-only — no backpropagation or gradient computation. The training code (`real_trainer.rs:178-184`) supports Metal (macOS) or CPU but not CUDA, and CPU throughput at ~50-100 tok/s training would require ~65 years for 200B tokens.
+
+**Memory analysis (per-expert distillation):**
+
+| Component | Size | Notes |
+|-----------|------|-------|
+| Single expert FFN shadow weights (FP16) | ~2 GB | ~1B params per expert (28B ÷ N experts) |
+| Gradients (FP32) | ~4 GB | Full precision for STE backprop |
+| AdamW optimizer state (2× FP32) | ~8 GB | First + second moment |
+| Teacher activations cache | ~1 GB | Per-batch FP16 |
+| EWC++ Fisher diagonal | ~0.5 GB | Per-expert accumulated |
+| **Per-expert total** | **~15.5 GB** | Fits in A100 40GB with headroom |
+
+**Full model simultaneous (Phase 2+):**
+
+| Component | Size | Notes |
+|-----------|------|-------|
+| 30B shadow weights (FP16) | ~60 GB | Requires A100 80GB or H100 |
+| Gradients + optimizer | ~360 GB | Requires multi-GPU parallelism |
+| **Total** | **~430 GB** | 4× A100 80GB or 4× H100 80GB |
+
+**Throughput and cost comparison:**
+
+| Platform | Training tok/s | Time (200B tok, Phase 1) | Cost |
+|----------|---------------|--------------------------|------|
+| CPU AVX2 (Ryzen 9) | ~50-100 | ~65 years | N/A |
+| Apple M4 Max (Metal) | ~500-1000 | ~6.5 years | N/A |
+| 1× A100 80GB (GCP on-demand) | ~15,000 | ~155 days | ~$3,700 |
+| 4× A100 80GB (GCP on-demand) | ~50,000 | ~46 days | ~$4,400 |
+| 4× A100 80GB (GCP spot) | ~50,000 | ~46 days | **~$1,300** |
+| 1× H100 (DataCrunch) | ~40,000 | ~58 days | ~$2,900 |
+| 4× H100 (DataCrunch) | ~140,000 | ~16 days | **~$3,200** |
+
+**Recommended infrastructure per phase:**
+
+| Phase | Instance | Duration | Estimated Cost | Strategy |
+|-------|----------|----------|----------------|----------|
+| Phase 1 (expert FFN, 200B tok) | 4× A100 80GB spot (GCP) | ~46 days | $1,300-$2,000 | Per-expert sequential with EWC++; each expert fits 1 GPU |
+| Phase 1 (router validation) | 1× A100 or local Metal | ~2-4 hours | <$10 | Contrastive training on router only (~2B params) |
+| Phase 2 (full ternary, 500B tok) | 4× H100 (DataCrunch) | ~16-32 days | $2,500-$5,000 | All layers; model-parallel across GPUs |
+| Phase 3 (native training, 4T tok) | 8× H100 cluster | ~90-180 days | $15,000-$30,000 | Full from-scratch; depends on funding |
+| Inference validation | Local CPU (AVX2/NEON) | Continuous | $0 | SIMD kernels validate TL1/TL2/I2_S correctness |
+| MicroLoRA adaptation | Local CPU | <1ms/update | $0 | Existing ndarray-based EWC++ pipeline |
+
+**Required code change**: Add CUDA device dispatch to `RealContrastiveTrainer`:
+```rust
+// Current (real_trainer.rs:178-184):
+let device = if config.use_metal {
+    Device::new_metal(0).unwrap_or(Device::Cpu)
+} else {
+    Device::Cpu
+};
+
+// Required for cloud GPU training:
+let device = if config.use_cuda {
+    Device::new_cuda(config.cuda_device_id).unwrap_or(Device::Cpu)
+} else if config.use_metal {
+    Device::new_metal(0).unwrap_or(Device::Cpu)
+} else {
+    Device::Cpu
+};
+```
+
+This is a single-line addition to `RealTrainingConfig` (`use_cuda: bool`, `cuda_device_id: usize`) and a 3-line change to device selection. The rest of the Candle training pipeline (tensors, optimizer, loss computation) works identically across CPU/Metal/CUDA.
+
+**Cost optimization strategies:**
+1. **Spot instances**: GCP A100 spot at ~$1/GPU-hr (70% off on-demand) — requires checkpointing every 30 min
+2. **DataCrunch / Lambda Labs**: H100 at $1.99-$2.10/hr (40-50% below GCP on-demand)
+3. **Expert-sequential on fewer GPUs**: Distill 1 expert at a time on 1× A100 80GB (~$1.50/hr), increasing wall time but reducing per-hour cost
+4. **Mixed precision training**: FP16 shadow weights + BF16 activations reduces memory, enabling smaller instances
+5. **Gradient checkpointing**: Trade compute for memory to fit on fewer GPUs
+
 ---
 
 ## Consequences
