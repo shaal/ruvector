@@ -6,7 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme = "README.md"
 description = "LLM serving runtime with Ruvector integration - Paged attention, KV cache, and SONA learning"
+keywords = ["llm", "inference", "paged-attention", "kv-cache", "ruvector"]
+categories = ["science", "algorithms", "machine-learning"]
 
 [dependencies]
 # Ruvector integration

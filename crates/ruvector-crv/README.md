@@ -1,5 +1,19 @@
 # ruvector-crv
 
+[![Crates.io](https://img.shields.io/crates/v/ruvector-crv.svg)](https://crates.io/crates/ruvector-crv)
+[![Documentation](https://docs.rs/ruvector-crv/badge.svg)](https://docs.rs/ruvector-crv)
+[![License](https://img.shields.io/crates/l/ruvector-crv.svg)](https://github.com/ruvnet/ruvector)
+
+**CRV (Coordinate Remote Viewing) protocol integration for RuVector** — maps the 6-stage signal line methodology to vector database subsystems with Poincaré ball embeddings, multi-head attention, and MinCut partitioning.
+
+## Installation
+
+```bash
+cargo add ruvector-crv
+```
+
+## Overview
+
 CRV (Coordinate Remote Viewing) protocol integration for ruvector.
 
 Maps the 6-stage CRV signal line methodology to ruvector's subsystems:
@@ -62,6 +76,17 @@ signal validity:
 let convergence = manager.find_convergence("1234-5678", 0.75).unwrap();
 // convergence.scores contains similarity values for converging entries
 ```
+
+## Related Crates
+
+- [`ruvector-core`](https://crates.io/crates/ruvector-core) — Core vector database with HNSW indexing
+- [`ruvector-attention`](https://crates.io/crates/ruvector-attention) — Multi-head attention for Stage II sensory vectors
+- [`ruvector-gnn`](https://crates.io/crates/ruvector-gnn) — Graph neural network for Stage III topology
+- [`ruvector-mincut`](https://crates.io/crates/ruvector-mincut) — MinCut partitioning for Stage VI clustering
+
+## Architecture
+
+Part of the [RuVector](https://github.com/ruvnet/ruvector) ecosystem.
 
 ## License
 
