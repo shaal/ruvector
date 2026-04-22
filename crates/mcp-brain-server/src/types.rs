@@ -105,6 +105,13 @@ pub enum BrainCategory {
     /// Information decomposition: ΦID, PID, redundancy/synergy analysis
     InformationDecomposition,
 
+    // ── Narrative / Demo Corpora ──
+    Fable,
+    Fairytale,
+    Myth,
+    #[serde(rename = "short-story")]
+    ShortStory,
+
     Custom(String),
 }
 
@@ -145,6 +152,10 @@ impl std::fmt::Display for BrainCategory {
             Self::Benchmark => write!(f, "benchmark"),
             Self::Consciousness => write!(f, "consciousness"),
             Self::InformationDecomposition => write!(f, "information_decomposition"),
+            Self::Fable => write!(f, "fable"),
+            Self::Fairytale => write!(f, "fairytale"),
+            Self::Myth => write!(f, "myth"),
+            Self::ShortStory => write!(f, "short-story"),
             Self::Custom(s) => write!(f, "{s}"),
         }
     }
