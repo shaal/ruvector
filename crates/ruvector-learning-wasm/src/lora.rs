@@ -249,6 +249,26 @@ impl LoRAPair {
     pub fn param_count(&self) -> usize {
         self.a.len() * 2 + 256 * 2
     }
+
+    /// Snapshot B as a flat Vec laid out [row0[0..dim], row1[0..dim]]
+    pub fn b_snapshot(&self) -> Vec<f32> {
+        let n = self.dim;
+        let mut out = Vec::with_capacity(2 * n);
+        for i in 0..n { out.push(self.b[0][i]); }
+        for i in 0..n { out.push(self.b[1][i]); }
+        out
+    }
+
+    /// Restore B from a snapshot produced by `b_snapshot`. Returns false if
+    /// the length doesn't match `2 * dim` — caller should treat that as
+    /// "stale snapshot, start fresh".
+    pub fn b_restore(&mut self, b: &[f32]) -> bool {
+        let n = self.dim;
+        if b.len() != 2 * n { return false; }
+        for i in 0..n { self.b[0][i] = b[i]; }
+        for i in 0..n { self.b[1][i] = b[n + i]; }
+        true
+    }
 }
 
 /// Main MicroLoRA engine managing multiple LoRA pairs
@@ -476,6 +496,21 @@ pub mod wasm_exports {
         #[wasm_bindgen]
         pub fn param_count(&self) -> usize {
             self.engine.default_lora.param_count()
+        }
+
+        /// Snapshot the learned B matrix (rows concatenated: row0[0..dim] then row1[0..dim]).
+        /// Round-trips losslessly through `set_b` for persisting adapter state.
+        #[wasm_bindgen]
+        pub fn get_b(&self) -> Vec<f32> {
+            self.engine.lora().b_snapshot()
+        }
+
+        /// Restore a previously-snapshotted B matrix. Quietly no-ops if the
+        /// length doesn't match `2 * dim` — caller should treat that as "stale
+        /// snapshot, start fresh".
+        #[wasm_bindgen]
+        pub fn set_b(&mut self, b: &[f32]) {
+            self.engine.lora_mut().b_restore(b);
         }
     }
 }
