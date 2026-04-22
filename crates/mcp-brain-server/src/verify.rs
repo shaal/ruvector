@@ -39,7 +39,7 @@ impl Verifier {
     pub fn new() -> Self {
         Self {
             max_title_len: 200,
-            max_content_len: 10_000,
+            max_content_len: 30_000,
             max_tags: 10,
             max_tag_len: 30,
             max_embedding_dim: 2048,
