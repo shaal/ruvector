@@ -79,11 +79,41 @@ fn dimension_mismatch_on_add() {
 }
 
 #[test]
-fn duplicate_id_rejected() {
+fn duplicate_id_upserts() {
+    // Contract: re-inserting the same id tombstones the old entry and
+    // adds a new node with the new vector. Matches FlatIndex's
+    // DashMap::insert replace semantics; the car-learning bridge
+    // relies on this to refresh observation vectors.
     let mut idx =
         HnswWasmIndex::new(2, DistanceMetric::Cosine, HnswConfig::default()).unwrap();
-    idx.add("dup".into(), unit(vec![1.0, 0.0])).unwrap();
-    assert!(idx.add("dup".into(), unit(vec![0.0, 1.0])).is_err());
+    idx.add("x".into(), unit(vec![1.0, 0.0])).unwrap();
+    assert_eq!(idx.len(), 1);
+
+    // Re-insert with a different vector — should succeed, len stays 1.
+    idx.add("x".into(), unit(vec![0.0, 1.0])).unwrap();
+    assert_eq!(idx.len(), 1, "upsert should not grow the live count");
+
+    // Searching near the new vector returns id "x" at top-1.
+    let results_new = idx.search(&unit(vec![0.0, 1.0]), 1).unwrap();
+    assert_eq!(results_new.len(), 1);
+    assert_eq!(results_new[0].id, "x");
+    assert!(
+        results_new[0].score < 0.01,
+        "post-upsert search against new vector should be near-zero distance, got {}",
+        results_new[0].score
+    );
+
+    // Searching near the OLD vector still returns "x" (it's the only id)
+    // but the distance should be large — confirming the old vector is
+    // no longer the one associated with "x" in the graph.
+    let results_old = idx.search(&unit(vec![1.0, 0.0]), 1).unwrap();
+    assert_eq!(results_old.len(), 1);
+    assert_eq!(results_old[0].id, "x");
+    assert!(
+        results_old[0].score > 0.5,
+        "search against old vector should be far (the new vector is orthogonal); got {}",
+        results_old[0].score
+    );
 }
 
 #[test]

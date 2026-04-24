@@ -98,10 +98,23 @@ impl VectorIndex for HnswWasmIndex {
                 actual: vector.len(),
             });
         }
-        if self.user_to_internal.contains_key(&id) {
-            return Err(RuvectorError::InvalidInput(format!(
-                "HnswWasmIndex: duplicate id {id:?}"
-            )));
+        // Upsert semantics: re-inserting the same id tombstones the old
+        // entry and adds a new node with the updated vector. FlatIndex
+        // does this via `DashMap::insert` (silent replace), and
+        // downstream code — the car-learning bridge in particular —
+        // calls .insert() with the same id when refreshing observation
+        // vectors. Without the tombstone-first step we'd reject with
+        // "duplicate id" and break the bridge's archive/observe path.
+        // HyperbolicHnsw doesn't support node removal, so the old node
+        // lingers in the graph with internal_to_user[old] = None; the
+        // search path already filters those out and over-fetches by
+        // tombstone_count.
+        if let Some(old_internal) = self.user_to_internal.remove(&id) {
+            if let Some(slot) = self.internal_to_user.get_mut(old_internal) {
+                *slot = None;
+            }
+            self.tombstone_count += 1;
+            self.live_count = self.live_count.saturating_sub(1);
         }
         let internal = self.inner.insert(vector).map_err(|e| {
             RuvectorError::IndexError(format!("hyperbolic insert failed: {e:?}"))
