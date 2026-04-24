@@ -6,6 +6,11 @@ use crate::index::flat::FlatIndex;
 #[cfg(feature = "hnsw")]
 use crate::index::hnsw::HnswIndex;
 
+// Only imported when the wasm-native HNSW would actually be selected —
+// i.e. when the native `hnsw` backend is not compiled in.
+#[cfg(all(feature = "hnsw-wasm", not(feature = "hnsw")))]
+use crate::index::hnsw_wasm::HnswWasmIndex;
+
 use crate::index::VectorIndex;
 use crate::types::*;
 use parking_lot::RwLock;
@@ -79,6 +84,11 @@ impl VectorDB {
         // Choose index based on configuration and available features
         #[allow(unused_mut)] // `index` is mutated only when feature = "storage"
         let mut index: Box<dyn VectorIndex> = if let Some(hnsw_config) = &options.hnsw_config {
+            // Backend priority: native `hnsw` (hnsw_rs) > `hnsw-wasm`
+            // (ruvector-hyperbolic-hnsw) > flat fallback. Both HNSW
+            // features may be compiled in simultaneously on native
+            // targets; the native backend wins because it is more
+            // mature and supports quantization/parallel rebuild.
             #[cfg(feature = "hnsw")]
             {
                 Box::new(HnswIndex::new(
@@ -87,10 +97,21 @@ impl VectorDB {
                     hnsw_config.clone(),
                 )?)
             }
-            #[cfg(not(feature = "hnsw"))]
+            #[cfg(all(not(feature = "hnsw"), feature = "hnsw-wasm"))]
             {
-                // Fall back to flat index if HNSW is not available
-                tracing::warn!("HNSW requested but not available (WASM build), using flat index");
+                Box::new(HnswWasmIndex::new(
+                    options.dimensions,
+                    options.distance_metric,
+                    hnsw_config.clone(),
+                )?)
+            }
+            #[cfg(all(not(feature = "hnsw"), not(feature = "hnsw-wasm")))]
+            {
+                let _ = hnsw_config; // acknowledge unused in this arm
+                tracing::warn!(
+                    "HNSW requested but no backend compiled in (enable `hnsw` or \
+                     `hnsw-wasm`); using flat index"
+                );
                 Box::new(FlatIndex::new(options.dimensions, options.distance_metric))
             }
         } else {
