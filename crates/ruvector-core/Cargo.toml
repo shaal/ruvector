@@ -14,6 +14,10 @@ description = "High-performance Rust vector database core with HNSW indexing"
 redb = { workspace = true, optional = true }
 memmap2 = { workspace = true, optional = true }
 hnsw_rs = { workspace = true, optional = true }
+# Pure-Rust HNSW backend used when the hnsw_rs backend is not available
+# (e.g. wasm32-unknown-unknown, which can't link mmap-rs / rayon threads).
+# Path dep because the crate is excluded from the workspace members list.
+ruvector-hyperbolic-hnsw = { path = "../ruvector-hyperbolic-hnsw", default-features = false, optional = true }
 simsimd = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 crossbeam = { workspace = true, optional = true }
@@ -100,6 +104,7 @@ simd = ["simsimd"]  # SIMD acceleration (not available in WASM)
 parallel = ["rayon", "crossbeam"]  # Parallel processing (not available in WASM)
 storage = ["redb", "memmap2"]  # File-based storage (not available in WASM)
 hnsw = ["hnsw_rs"]  # HNSW indexing (not available in WASM due to mmap dependency)
+hnsw-wasm = ["dep:ruvector-hyperbolic-hnsw"]  # Pure-Rust HNSW backend; wasm-safe
 memory-only = []  # Pure in-memory storage for WASM
 uuid-support = []  # Deprecated: uuid is now always included
 real-embeddings = []  # Feature flag for embedding provider API (use ApiEmbedding for production)

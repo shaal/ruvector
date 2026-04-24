@@ -3,6 +3,8 @@
 pub mod flat;
 #[cfg(feature = "hnsw")]
 pub mod hnsw;
+#[cfg(feature = "hnsw-wasm")]
+pub mod hnsw_wasm;
 
 use crate::error::Result;
 use crate::types::{SearchResult, VectorId};
