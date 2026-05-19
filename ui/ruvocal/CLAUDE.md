@@ -1,126 +1,59 @@
-# CLAUDE.md
+# ui/ruvocal/
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+SvelteKit chat application (a fork of HuggingChat / `chat-ui`, package name `chat-ui` v0.20.0, branded as **ruvocal**). It provides a multimodal LLM chat interface with MCP tool calling, an intelligent LLM router, voice transcription, image uploads, conversation sharing, OpenID auth, and a Postgres/Mongo-backed persistence layer.
 
-## Overview
+## Tech stack
 
-Chat UI is a SvelteKit application that provides a chat interface for LLMs. It powers HuggingChat (hf.co/chat). The app speaks exclusively to OpenAI-compatible APIs via `OPENAI_BASE_URL`.
+- **Framework:** SvelteKit 2 + Svelte 5 (runes).
+- **Build:** Vite 6, TypeScript 5.5, two adapters — `@sveltejs/adapter-node` (default) and `@sveltejs/adapter-static` (set `ADAPTER=static`).
+- **Styling:** TailwindCSS 3 + `@tailwindcss/typography`, PostCSS, custom CSS in `src/styles/`.
+- **Backend:** SvelteKit server routes, MongoDB + Postgres, MCP SDK (`@modelcontextprotocol/sdk`), OpenAI SDK, OpenID Connect.
+- **WASM:** loads `rvagent_wasm` from `static/wasm/` (provides MCP-style tools in the browser).
+- **Other:** marked + KaTeX + highlight.js, satori for OG images, three.js for 3D, pino for logs, prom-client for metrics.
 
-## Commands
+## Important files
 
-```bash
-npm run dev          # Start dev server on localhost:5173
-npm run build        # Production build
-npm run preview      # Preview production build
-npm run check        # TypeScript validation (svelte-kit sync + svelte-check)
-npm run lint         # Check formatting (Prettier) and linting (ESLint)
-npm run format       # Auto-format with Prettier
-npm run test         # Run all tests (Vitest)
+- `package.json` — scripts: `dev`, `build`, `build:static`, `preview`, `check`, `lint`, `format`, `test`, `populate`, `config`, `updateLocalEnv`.
+- `svelte.config.js` — adapter selection, CSP/CSRF, env loading (`.env.local`, `.env`).
+- `vite.config.ts` — Vite config with `unplugin-icons`.
+- `tailwind.config.cjs`, `postcss.config.js`, `tsconfig.json`, `.eslintrc.cjs`, `.prettierrc`.
+- `Dockerfile`, `docker-compose.yml`, `entrypoint.sh` — container build/runtime.
+- `rvf.manifest.json` — application manifest (likely for an internal "Rvector" build/deploy system).
+- `PRIVACY.md`, `LICENSE` — legal.
+
+## Directories
+
+- `src/` — SvelteKit app: `app.html`, `hooks.server.ts`, `hooks.ts`, `lib/`, `routes/`, `styles/`.
+- `chart/` — Helm chart `chat-ui` for k8s deployment (with `env/dev.yaml`, `env/prod.yaml`).
+- `config/` — branding example env (`branding.env.example`).
+- `docs/` — user-facing documentation (`source/`) and ADRs (`adr/`).
+- `mcp-bridge/` — standalone Node/Express MCP HTTP bridge that routes tool calls to backend services.
+- `models/` — placeholder for legacy model definitions (now mostly empty).
+- `scripts/` — helper Node/TS scripts (`config.ts`, `populate.ts`, `updateLocalEnv.ts`, `generate-welcome.mjs`).
+- `static/` — static assets (favicons, manifests, branded variants for `chatui`/`huggingchat`, WASM artifacts).
+- `stub/` — local npm overrides to stub native deps (`@reflink/reflink`).
+
+## How to run
+
+```sh
+cd ui/ruvocal
+npm install
+# create .env.local with OPENAI_BASE_URL / OPENAI_API_KEY
+npm run dev          # dev server
+npm run build        # SSR Node build
+ADAPTER=static npm run build   # static SPA build
+npm run test         # vitest
+npm run check        # svelte-check
 ```
 
-### Running a Single Test
+## Key conventions
 
-```bash
-npx vitest run path/to/file.spec.ts        # Run specific test file
-npx vitest run -t "test name"              # Run test by name
-npx vitest --watch path/to/file.spec.ts    # Watch mode for single file
-```
+- SvelteKit file-system routes under `src/routes/`. `+page.svelte` is the page, `+page.ts` is the universal load, `+server.ts` is an API endpoint, `+layout.svelte` is a shared layout. `(group)` are route groups, `[param]` are route params, `[...rest]` are rest params.
+- Server-only code lives under `src/lib/server/` (never imported by client). Client/shared utilities go in `src/lib/`.
+- Two API surfaces: legacy `src/routes/api/...` and the v2 surface under `src/routes/api/v2/...` (uses superjson, hono-style helpers in `src/lib/server/api/`).
+- Tests use vitest (`*.spec.ts` / `*.test.ts`) with setup files in `scripts/setups/`.
 
-### Test Environments
+## Pointers
 
-Tests are split into three workspaces (configured in vite.config.ts):
-
-- **Client tests** (`*.svelte.test.ts`): Browser environment with Playwright
-- **SSR tests** (`*.ssr.test.ts`): Node environment for server-side rendering
-- **Server tests** (`*.test.ts`, `*.spec.ts`): Node environment for utilities
-
-## Architecture
-
-### Stack
-
-- **SvelteKit 2** with Svelte 5 (uses runes: `$state`, `$effect`, `$bindable`)
-- **MongoDB** for persistence (auto-fallback to in-memory with MongoMemoryServer when `MONGODB_URL` not set)
-- **TailwindCSS** for styling
-
-### Key Directories
-
-```
-src/
-├── lib/
-│   ├── components/       # Svelte components (chat/, mcp/, voice/, icons/)
-│   ├── server/
-│   │   ├── api/utils/       # Shared API helpers (auth, superjson, model/conversation resolvers)
-│   │   ├── textGeneration/  # LLM streaming pipeline
-│   │   ├── mcp/          # Model Context Protocol integration
-│   │   ├── router/       # Smart model routing (Omni)
-│   │   ├── database.ts   # MongoDB collections
-│   │   ├── models.ts     # Model registry from OPENAI_BASE_URL/models
-│   │   └── auth.ts       # OpenID Connect authentication
-│   ├── types/            # TypeScript interfaces (Conversation, Message, User, Model, etc.)
-│   ├── stores/           # Svelte stores for reactive state
-│   └── utils/            # Helpers (tree/, marked.ts, auth.ts, etc.)
-├── routes/               # SvelteKit file-based routing
-│   ├── conversation/[id]/  # Chat page + streaming endpoint
-│   ├── settings/         # User settings pages
-│   ├── api/              # Legacy v1 API endpoints (mcp, transcribe, fetch-url)
-│   ├── api/v2/           # REST API endpoints (+server.ts)
-│   └── r/[id]/           # Shared conversation view
-```
-
-### Text Generation Flow
-
-1. User sends message via `POST /conversation/[id]`
-2. Server validates user, fetches conversation history
-3. Builds message tree structure (see `src/lib/utils/tree/`)
-4. Calls LLM endpoint via OpenAI client
-5. Streams response back, stores in MongoDB
-
-### Model Context Protocol (MCP)
-
-MCP servers are configured via `MCP_SERVERS` env var. When enabled, tools are exposed as OpenAI function calls. The router can auto-select tools-capable models when `LLM_ROUTER_ENABLE_TOOLS=true`.
-
-### LLM Router (Omni)
-
-Smart routing via Arch-Router model. Configured with:
-
-- `LLM_ROUTER_ROUTES_PATH`: JSON file defining routes
-- `LLM_ROUTER_ARCH_BASE_URL`: Router endpoint
-- Shortcuts: multimodal routes bypass router if `LLM_ROUTER_ENABLE_MULTIMODAL=true`
-
-### Database Collections
-
-- `conversations` - Chat sessions with nested messages
-- `users` - User accounts (OIDC-backed)
-- `sessions` - Session data
-- `sharedConversations` - Public share links
-- `settings` - User preferences
-
-## Environment Setup
-
-Copy `.env` to `.env.local` and configure:
-
-```env
-OPENAI_BASE_URL=https://router.huggingface.co/v1
-OPENAI_API_KEY=hf_***
-# MONGODB_URL is optional; omit for in-memory DB persisted to ./db
-```
-
-See `.env` for full list of variables including router config, MCP servers, auth, and feature flags.
-
-## Code Conventions
-
-- TypeScript strict mode enabled
-- ESLint: no `any`, no non-null assertions
-- Prettier: tabs, 100 char width, Tailwind class sorting
-- Server vs client separation via SvelteKit conventions (`+page.server.ts` vs `+page.ts`)
-
-## Feature Development Checklist
-
-When building new features, consider:
-
-1. **HuggingChat vs self-hosted**: Wrap HuggingChat-specific features with `publicConfig.isHuggingChat`
-2. **Settings persistence**: Add new fields to `src/lib/types/Settings.ts`, update API endpoint at `src/routes/api/v2/user/settings/+server.ts`
-3. **Rich dropdowns**: Use `bits-ui` (Select, DropdownMenu) instead of native elements when you need icons/images in options
-4. **Scrollbars**: Use `scrollbar-custom` class for styled scrollbars
-5. **Icons**: Custom icons in `$lib/components/icons/`, use Carbon (`~icons/carbon/*`) or Lucide (`~icons/lucide/*`) for standard icons
-6. **Provider avatars**: Use `PROVIDERS_HUB_ORGS` from `@huggingface/inference` for HF provider avatar URLs
+- Architecture overview: `docs/source/developing/architecture.md`.
+- ADRs for the ruvocal fork and MCP integration: `docs/adr/ADR-038-RUVOCAL-FORK.md`, `docs/adr/ADR-033-RUVECTOR-RUFLO-MCP-INTEGRATION.md`, `docs/adr/ADR-035-MCP-TOOL-GROUPS.md`.
