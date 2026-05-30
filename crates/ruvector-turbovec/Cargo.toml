@@ -1,0 +1,23 @@
+[package]
+name = "ruvector-turbovec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "TurboVec: multi-bit TurboQuant FastScan-style ANN index (2/4-bit Lloyd-Max scalar quantization + TQ+ per-coordinate calibration + length-renormalized unbiased scoring). Implements ADR-194."
+
+[[bin]]
+name = "turbovec-demo"
+path = "src/main.rs"
+
+[dependencies]
+ruvector-rabitq = { path = "../ruvector-rabitq" }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }

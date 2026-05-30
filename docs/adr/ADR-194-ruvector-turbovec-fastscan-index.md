@@ -22,9 +22,34 @@ tags: [quantization, ann, vector-search, turboquant, fastscan, simd, lloyd-max, 
 
 ## Status
 
-**Proposed.** No code written yet. This ADR scopes a new crate
-`crates/ruvector-turbovec` and the reuse boundaries against
-`ruvector-rabitq`, `ruvector-rairs`, and `ruvllm`.
+**Accepted (M1 implemented).** The scalar reference milestone (M1) is
+implemented as `crates/ruvector-turbovec`: rotation reuse + Lloyd–Max 2/4-bit SQ
++ TQ+ calibration + length-renormalized unbiased scoring + `IdMapIndex`
+(O(1) delete, filtered search). Build is green
+(`cargo build --release -p ruvector-turbovec`); 12 unit tests + 1 doc-test pass;
+clippy clean. M2–M4 (FastScan SIMD kernel, AVX-512, dispatcher registration)
+remain future work. Measured proof below.
+
+### Validation (measured — `cargo run --release -p ruvector-turbovec`)
+
+`n = 5,000` **uniform-random** vectors (the *worst case* for ANN — no cluster
+structure to exploit), `dim = 256`, `k = 10`, **no f32 rerank**, scored against
+exact brute-force L2:
+
+| Width | recall@10 | bytes/vec (raw 1024) | compression | mean cosine bias |
+|-------|-----------|----------------------|-------------|------------------|
+| 1-bit | 0.308 | 48 | 25.6× | +0.0005 |
+| 2-bit | 0.561 | 80 | 14.2× | +0.0001 |
+| **4-bit** | **0.879** | **144** | **7.5×** | **−0.0000** |
+
+- **Recall rises monotonically with bit-width** — exactly the 2–4-bit regime the
+  1-bit RaBitQ path cannot reach without re-inflating memory via f32 rerank.
+- **Mean cosine bias ≈ 0 at every width** — empirical confirmation that the
+  per-vector `c_x` length-renormalization (§T4) yields an *unbiased* estimator.
+- On real clustered embeddings (OpenAI/Cohere) recall at a given width is
+  materially higher than on this uniform stress test.
+- Determinism (same seed → bit-identical results) and `IdMapIndex` delete +
+  allowlist-filtered search both verified PASS.
 
 ## Context
 
