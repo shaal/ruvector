@@ -78,10 +78,16 @@ What we are **missing** is the regime that production vector DBs (FAISS
   vector instruction without ever materializing f32,
 - competitive recall **without** a mandatory f32 rerank pass.
 
-turbovec demonstrates this regime hits **16× compression** (6,144 → 384 bytes
-for d=1536), **beats FAISS `IndexPQ` by 0.4–3.4 R@1 points** at 4-bit, and runs
-**12–20 % faster than FAISS FastScan on ARM** — all with *online* ingest and no
-training phase.
+The upstream reference project ([RyanCodrai/turbovec]) *reports* this regime
+reaching ~16× compression (6,144 → 384 bytes for d=1536), R@1 competitive with or
+ahead of FAISS `IndexPQ` at 4-bit, and FastScan-class scan throughput on ARM —
+all with online ingest and no training phase. **Those are the external project's
+numbers, not this crate's.** This crate's own *measured* results are the
+uniform-random worst-case table under "Validation" above (recall@10 of
+0.308 / 0.561 / 0.879 at 1/2/4-bit); broader competitive benchmarks are listed
+as targets-to-validate in "Acceptance criteria" and the SIMD-kernel milestones.
+
+[RyanCodrai/turbovec]: https://github.com/RyanCodrai/turbovec
 
 ### What already exists (and why this is not duplication)
 

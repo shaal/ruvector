@@ -14,10 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 ruvector-rabitq = { path = "../ruvector-rabitq" }
+# `rand` is a normal dependency because the `turbovec-demo` binary (and the
+# unit tests) use it; binaries cannot pull from `[dev-dependencies]`.
 rand = { workspace = true }
-rand_distr = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-rand = { workspace = true }
