@@ -85,7 +85,16 @@ pub fn quantize_coord(centroids: &[f32], z: f32) -> u8 {
 
 /// Pack per-coordinate code indices (`0..levels`) tightly, MSB-first within
 /// each byte, into `code_bytes(dim)` bytes.
+///
+/// # Preconditions
+/// Every `code` must be `< bw.levels()`. Out-of-range codes have their high
+/// bits truncated to the bit width (checked in debug builds).
 pub fn pack(codes: &[u8], bw: BitWidth) -> Vec<u8> {
+    debug_assert!(
+        codes.iter().all(|&c| (c as usize) < bw.levels()),
+        "pack: code out of range for {bw:?} ({} levels)",
+        bw.levels()
+    );
     let bits = bw.bits();
     let mut out = vec![0u8; bw.code_bytes(codes.len())];
     let mut bit_pos = 0usize;
@@ -104,7 +113,17 @@ pub fn pack(codes: &[u8], bw: BitWidth) -> Vec<u8> {
 }
 
 /// Inverse of [`pack`]: recover `dim` code indices from packed bytes.
+///
+/// # Preconditions
+/// `packed.len()` must be `>= bw.code_bytes(dim)` (checked in debug builds);
+/// a shorter slice panics on out-of-bounds access in release builds.
 pub fn unpack(packed: &[u8], dim: usize, bw: BitWidth) -> Vec<u8> {
+    debug_assert!(
+        packed.len() >= bw.code_bytes(dim),
+        "unpack: packed slice too short ({} < {})",
+        packed.len(),
+        bw.code_bytes(dim)
+    );
     let bits = bw.bits();
     let mut out = vec![0u8; dim];
     let mut bit_pos = 0usize;

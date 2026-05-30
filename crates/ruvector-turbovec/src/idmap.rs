@@ -76,18 +76,26 @@ impl IdMapIndex {
             + self.id_to_pos.len() * (8 + std::mem::size_of::<usize>())
     }
 
-    /// Add one vector under external id `id`. Errors on duplicate id.
+    /// Add one vector under external id `id`. Errors on dim/duplicate id.
     pub fn add_with_id(&mut self, id: u64, vector: Vec<f32>) -> Result<()> {
+        if vector.len() != self.inner.dim() {
+            return Err(TurboVecError::DimMismatch {
+                expected: self.inner.dim(),
+                got: vector.len(),
+            });
+        }
         if self.id_to_pos.contains_key(&id) {
             return Err(TurboVecError::DuplicateId(id));
         }
         let pos = self.ext_ids.len();
-        // inner uses internal id == pos.
+        let got = vector.len();
+        // inner uses internal id == pos; dim already validated above so this
+        // map_err is effectively unreachable, but stays correct if it isn't.
         self.inner
             .add(pos, vector)
             .map_err(|_| TurboVecError::DimMismatch {
                 expected: self.inner.dim(),
-                got: 0,
+                got,
             })?;
         self.ext_ids.push(id);
         self.alive.push(true);
@@ -98,6 +106,12 @@ impl IdMapIndex {
 
     /// Bulk add. `ids.len()` must equal `vectors.len()`.
     pub fn add_with_ids(&mut self, vectors: &[Vec<f32>], ids: &[u64]) -> Result<()> {
+        if vectors.len() != ids.len() {
+            return Err(TurboVecError::BatchLenMismatch {
+                vectors: vectors.len(),
+                ids: ids.len(),
+            });
+        }
         for (v, &id) in vectors.iter().zip(ids.iter()) {
             self.add_with_id(id, v.clone())?;
         }
@@ -215,6 +229,26 @@ mod tests {
         assert!(matches!(
             ix.add_with_id(7, vec![2.0; 8]),
             Err(TurboVecError::DuplicateId(7))
+        ));
+    }
+
+    #[test]
+    fn batch_len_mismatch_rejected() {
+        let mut ix = IdMapIndex::new(8, BitWidth::Two).unwrap();
+        let vectors = vec![vec![1.0; 8], vec![2.0; 8]];
+        let ids = vec![1u64]; // too few
+        assert!(matches!(
+            ix.add_with_ids(&vectors, &ids),
+            Err(TurboVecError::BatchLenMismatch { vectors: 2, ids: 1 })
+        ));
+    }
+
+    #[test]
+    fn wrong_dim_rejected() {
+        let mut ix = IdMapIndex::new(8, BitWidth::Two).unwrap();
+        assert!(matches!(
+            ix.add_with_id(1, vec![0.0; 4]),
+            Err(TurboVecError::DimMismatch { expected: 8, got: 4 })
         ));
     }
 

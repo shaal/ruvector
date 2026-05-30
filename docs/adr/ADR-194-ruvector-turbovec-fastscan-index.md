@@ -1,7 +1,7 @@
 ---
 adr: 194
 title: "ruvector-turbovec — Multi-bit TurboQuant FastScan ANN Index (2/4-bit SQ + TQ+ calibration + nibble-LUT SIMD)"
-status: proposed
+status: accepted
 date: 2026-05-29
 authors: [oshaal, claude-flow]
 related: [ADR-003, ADR-157, ADR-193]

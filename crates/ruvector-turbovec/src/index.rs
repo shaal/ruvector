@@ -110,10 +110,14 @@ impl TurboVecIndex {
         if self.is_finalized() {
             return;
         }
-        // Rotate staged unit vectors to fit calibration.
+        // Rotate staged unit vectors to fit calibration. Zero vectors are not
+        // unit-normalizable (they would contribute all-zero rows and bias
+        // shift/scale toward zero), so they are excluded here — `encode_and_store`
+        // already special-cases them at encode time.
         let rotated: Vec<Vec<f32>> = self
             .staging
             .iter()
+            .filter(|(_, v)| v.iter().map(|x| x * x).sum::<f32>() > 1e-20)
             .map(|(_, v)| {
                 let mut u = v.clone();
                 normalize_inplace(&mut u);
@@ -276,9 +280,14 @@ impl TurboVecIndex {
 
 impl AnnIndex for TurboVecIndex {
     fn add(&mut self, id: usize, vector: Vec<f32>) -> ruvector_rabitq::error::Result<()> {
-        // Trait uses rabitq's Result; validate dim and translate failures into a
-        // panic-free path by clamping (dim mismatch is a programmer error).
-        debug_assert_eq!(vector.len(), self.dim, "TurboVecIndex::add dim mismatch");
+        // Surface the same `DimensionMismatch` other `AnnIndex` impls do, in
+        // release builds too — never silently accept a wrong-length vector.
+        if vector.len() != self.dim {
+            return Err(ruvector_rabitq::error::RabitqError::DimensionMismatch {
+                expected: self.dim,
+                actual: vector.len(),
+            });
+        }
         if self.is_finalized() {
             self.encode_and_store(id, &vector);
         } else {
@@ -291,10 +300,14 @@ impl AnnIndex for TurboVecIndex {
     }
 
     fn search(&self, query: &[f32], k: usize) -> ruvector_rabitq::error::Result<Vec<SearchResult>> {
-        // Map our error into rabitq's by treating dim mismatch as empty result
-        // is wrong; instead surface via the shared error enum is not possible,
-        // so we panic-free clamp: callers pass correct dims (debug-checked).
-        Ok(self.search_core(query, k).unwrap_or_default())
+        // Propagate dimension mismatches rather than masking them as an empty
+        // result (which would hide caller bugs).
+        self.search_core(query, k).map_err(|_| {
+            ruvector_rabitq::error::RabitqError::DimensionMismatch {
+                expected: self.dim,
+                actual: query.len(),
+            }
+        })
     }
 
     fn len(&self) -> usize {
@@ -404,6 +417,40 @@ mod tests {
         }
         let mean_err = (sum_err / n as f64).abs();
         assert!(mean_err < 0.02, "estimator biased: mean |err| = {mean_err:.4}");
+    }
+
+    #[test]
+    fn add_and_search_reject_wrong_dim() {
+        let mut ix = TurboVecIndex::new(16, BitWidth::Four).unwrap();
+        // add with wrong-length vector must error, not silently accept.
+        assert!(ix.add(0, vec![0.0; 8]).is_err());
+        ix.add(0, vec![0.1; 16]).unwrap();
+        ix.finalize();
+        // search with wrong-length query must error, not return empty.
+        assert!(ix.search(&[0.0; 8], 1).is_err());
+        assert!(ix.search(&[0.0; 16], 1).is_ok());
+    }
+
+    #[test]
+    fn finalize_excludes_zero_vectors_from_calibration() {
+        // A pile of zero vectors mixed into the warm-up must NOT corrupt the
+        // calibration fitted from the real vectors. If zeros leaked in they
+        // would collapse `scale` toward zero and wreck reconstruction; we prove
+        // calibration stays faithful via self-retrieval of a stored vector.
+        let dim = 64;
+        let real = random_vectors(50, dim, 2);
+        let mut ix = TurboVecIndex::with_seed(dim, BitWidth::Four, 1).unwrap();
+        for _ in 0..50 {
+            ix.add(0, vec![0.0; dim]).unwrap();
+        }
+        for (i, v) in real.iter().enumerate() {
+            ix.add(i + 1, v.clone()).unwrap();
+        }
+        ix.finalize();
+        // Querying a stored real vector must return that same vector as nearest
+        // (distance to self ≈ quantization error ≪ distance to any other point).
+        let hits = ix.search(&real[7], 1).unwrap();
+        assert_eq!(hits[0].id, 8, "self-retrieval failed → calibration corrupted");
     }
 
     #[test]

@@ -31,6 +31,10 @@ impl Calibration {
     /// theoretical `N(0, 1/d)` std (`1/√d`) and zero mean, which keeps the
     /// estimator sane on tiny indexes.
     pub fn fit(rotated_unit_rows: &[Vec<f32>], dim: usize) -> Self {
+        debug_assert!(
+            rotated_unit_rows.iter().all(|r| r.len() == dim),
+            "Calibration::fit: every row must have length dim ({dim})"
+        );
         let n = rotated_unit_rows.len();
         if n < 2 {
             let s = 1.0f32 / (dim as f32).sqrt();

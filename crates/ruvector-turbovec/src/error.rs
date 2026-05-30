@@ -16,6 +16,10 @@ pub enum TurboVecError {
     /// An external id was reused in `add_with_ids`.
     #[error("duplicate external id: {0}")]
     DuplicateId(u64),
+
+    /// `add_with_ids` was called with `vectors.len() != ids.len()`.
+    #[error("batch length mismatch: {vectors} vectors but {ids} ids")]
+    BatchLenMismatch { vectors: usize, ids: usize },
 }
 
 /// Crate result alias.
