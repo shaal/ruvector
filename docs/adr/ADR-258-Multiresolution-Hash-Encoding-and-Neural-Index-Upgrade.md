@@ -325,5 +325,3 @@ Wrap the read path in an async executor so HNSW traversal I/O (`madvise` prefetc
 ## 11. Decision Outcome
 
 **Accepted (Proposed → pending Phase-1 harness results).** Promotion to default is contingent on the self-learning harness meeting S1 and S3 with the stated statistical bar; perf criteria (S4–S6) inform default config selection but do not alone justify promotion.
-</content>
-</invoke>

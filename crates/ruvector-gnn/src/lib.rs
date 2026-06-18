@@ -50,6 +50,7 @@
 pub mod compress;
 pub mod error;
 pub mod ewc;
+pub mod feature_source;
 pub mod graphmae;
 pub mod layer;
 pub mod query;
@@ -69,6 +70,9 @@ pub mod cold_tier;
 pub use compress::{CompressedTensor, CompressionLevel, TensorCompress};
 pub use error::{GnnError, Result};
 pub use ewc::ElasticWeightConsolidation;
+pub use feature_source::{FeatureSource, FlatEmbedding};
+#[cfg(feature = "hashenc")]
+pub use feature_source::HashAugmented;
 pub use graphmae::{
     mse_loss, sce_loss, FeatureMasking, GATEncoder, GraphData, GraphMAE, GraphMAEConfig,
     GraphMAEDecoder, LossFn, MaskResult,
