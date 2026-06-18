@@ -30,19 +30,25 @@
 //! The allocator is pure-Rust and GPU-free; attention kernels (FlashAttention-3
 //! / Metal / cudarc) plug in later behind a trait without touching the pool.
 
+mod attention;
 mod cache;
 mod pool;
 mod prefix;
 mod quant;
+mod scheduler;
 mod table;
 
 #[cfg(test)]
 mod tests;
 
+pub use attention::{
+    paged_attention_forward, AttentionParams, BlockAttention, CpuPagedAttention,
+};
 pub use cache::{PagedKvCache, PagedKvStats};
 pub use pool::{BlockPool, BlockPoolStats, PhysicalBlock};
 pub use prefix::{PrefixIndex, PrefixMatch};
-pub use quant::{BlockQuantizer, IdentityQuantizer, QuantTier};
+pub use quant::{BlockQuantizer, IdentityQuantizer, QuantTier, UniformQuantizer};
+pub use scheduler::{AdmitOutcome, BatchScheduler, SchedulerConfig, SchedulerStats};
 pub use table::BlockTable;
 
 use serde::{Deserialize, Serialize};

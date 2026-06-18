@@ -415,6 +415,27 @@ impl PagedKvCache {
         Ok((keys, values, state.table.num_tokens()))
     }
 
+    /// Zero-copy visit of each `(keys, values, num_tokens)` block of `seq_id` in
+    /// logical order, under the cache lock. This is the substrate a paged
+    /// attention kernel runs against without materializing the contiguous KV
+    /// (unlike [`Self::gather_kv`]). The closure sees the *full* block buffers;
+    /// only the first `num_tokens * token_stride` elements are valid.
+    pub fn for_each_block<F>(&self, seq_id: SeqId, mut f: F) -> Result<()>
+    where
+        F: FnMut(&[f32], &[f32], usize),
+    {
+        let inner = self.inner.lock();
+        let state = inner
+            .seqs
+            .get(&seq_id)
+            .ok_or_else(|| RuvLLMError::NotFound(format!("sequence {seq_id}")))?;
+        for &bid in state.table.blocks() {
+            let blk = inner.pool.block(bid);
+            f(&blk.keys, &blk.values, blk.num_tokens);
+        }
+        Ok(())
+    }
+
     /// O(1) telemetry snapshot.
     pub fn stats(&self) -> PagedKvStats {
         let inner = self.inner.lock();

@@ -343,10 +343,14 @@ pub use optimization::{
 };
 pub use paged_attention::{PageBlock, PageTable, PagedAttention, PagedAttentionConfig};
 // ADR-258: Paged block-based KV cache + block-aligned prefix sharing.
+// NOTE: `SchedulerConfig`/`SchedulerStats` (serving) and `UniformQuantizer`
+// (qat) already exist at the crate root, so the paged_kv variants are reached
+// via the `paged_kv::` path to avoid name clashes.
 pub use paged_kv::{
-    BlockId, BlockPool, BlockPoolStats, BlockQuantizer, BlockTable, IdentityQuantizer,
-    PagedKvCache, PagedKvConfig, PagedKvStats, PhysicalBlock, PrefixIndex, PrefixMatch, QuantTier,
-    SeqId,
+    paged_attention_forward, AdmitOutcome, AttentionParams, BatchScheduler, BlockAttention,
+    BlockId, BlockPool, BlockPoolStats, BlockQuantizer, BlockTable, CpuPagedAttention,
+    IdentityQuantizer, PagedKvCache, PagedKvConfig, PagedKvStats, PhysicalBlock, PrefixIndex,
+    PrefixMatch, QuantTier, SeqId,
 };
 pub use policy_store::{PolicyEntry, PolicyStore, PolicyType, QuantizationPolicy, RouterPolicy};
 // QAT (Quantization-Aware Training) - ADR-090 Phase 2

@@ -233,6 +233,27 @@ Combined with ADR-004, archive-tier blocks add the existing 8–22× per-block m
 
 ---
 
+## Implementation Status
+
+Implemented in `crates/ruvllm/src/paged_kv/` (module `ruvllm::paged_kv`):
+
+| Phase | Status | Artifacts |
+|-------|--------|-----------|
+| 1 — Allocator + block table | ✅ Done | `pool.rs` (`BlockPool`, `PhysicalBlock`), `table.rs` (`BlockTable`), `mod.rs` (`PagedKvConfig`, `BlockId`) |
+| 2 — Prefix sharing + CoW | ✅ Done | `prefix.rs` (`PrefixIndex`, chained hash), `cache.rs` (`allocate_with_prefix`, `fork`, single-block CoW) |
+| 3 — Quantization layering | ✅ Done | `quant.rs` (`QuantTier`, `BlockQuantizer`, `Identity`/`Uniform`), `cache.rs::demote_cold_blocks` |
+| 4 — Continuous batching | ✅ Done | `scheduler.rs` (`BatchScheduler`: admit/preempt/finish, block-budget + watermark, recompute preemption) |
+| 5 — Tests & micro-benchmarks | ✅ Done | 34 unit/`proptest` tests; `benches/paged_kv_bench.rs` (alloc/append/prefix/fork/gather) |
+| 6 — Full integration & e2e | ◑ Substrate | `attention.rs` (`BlockAttention` trait, `CpuPagedAttention` streaming-softmax kernel verified vs. dense). Remaining: `serving`/`session` wire-up behind `paged-kv` feature flag, GPU kernels, e2e benchmarks. |
+
+The CPU paged-attention kernel uses a FlashAttention-style online softmax that
+streams over blocks (`O(num_heads · head_dim)` memory), which is the exact access
+pattern the GPU backends (FA-3 / Metal / cudarc) will implement behind the same
+`BlockAttention` trait — so Phase 6 hardware kernels drop in without allocator
+changes.
+
+---
+
 ## References
 
 1. Kwon, W. et al. *Efficient Memory Management for Large Language Model Serving with PagedAttention* (vLLM), SOSP 2023. https://arxiv.org/abs/2309.06180
@@ -260,3 +281,4 @@ Combined with ADR-004, archive-tier blocks add the existing 8–22× per-block m
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-06-18 | RuVector Architecture Team | Initial proposal |
+| 1.1 | 2026-06-18 | RuVector Architecture Team | Add Implementation Status; Phases 1–5 done, Phase 6 substrate (`BlockAttention` kernel) + Phase 4 scheduler landed |
