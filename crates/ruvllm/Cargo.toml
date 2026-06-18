@@ -108,6 +108,7 @@ block2 = { version = "0.6", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+proptest = { workspace = true }
 tempfile = "3.13"
 tracing-subscriber = { workspace = true }
 
@@ -201,6 +202,11 @@ crate-type = ["rlib"]
 # Benchmark configurations
 [[bench]]
 name = "attention_bench"
+harness = false
+
+# ADR-258: paged block-based KV cache allocator micro-benchmarks.
+[[bench]]
+name = "paged_kv_bench"
 harness = false
 
 [[bench]]

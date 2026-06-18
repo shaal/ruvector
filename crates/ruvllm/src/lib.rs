@@ -138,6 +138,7 @@ pub mod models;
 pub mod moe;
 pub mod optimization;
 pub mod paged_attention;
+pub mod paged_kv;
 pub mod policy_store;
 pub mod qat;
 pub mod quality;
@@ -341,6 +342,12 @@ pub use optimization::{
     SonaLlm, SonaLlmConfig, SpeculativeConfig, TokenBudgetAllocation, TrainingSample,
 };
 pub use paged_attention::{PageBlock, PageTable, PagedAttention, PagedAttentionConfig};
+// ADR-258: Paged block-based KV cache + block-aligned prefix sharing.
+pub use paged_kv::{
+    BlockId, BlockPool, BlockPoolStats, BlockQuantizer, BlockTable, IdentityQuantizer,
+    PagedKvCache, PagedKvConfig, PagedKvStats, PhysicalBlock, PrefixIndex, PrefixMatch, QuantTier,
+    SeqId,
+};
 pub use policy_store::{PolicyEntry, PolicyStore, PolicyType, QuantizationPolicy, RouterPolicy};
 // QAT (Quantization-Aware Training) - ADR-090 Phase 2
 pub use qat::{
