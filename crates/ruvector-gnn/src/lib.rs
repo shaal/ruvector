@@ -55,6 +55,7 @@ pub mod graphmae;
 pub mod layer;
 pub mod query;
 pub mod replay;
+pub mod residual;
 pub mod scheduler;
 pub mod search;
 pub mod tensor;
@@ -80,6 +81,7 @@ pub use graphmae::{
 pub use layer::RuvectorLayer;
 pub use query::{QueryMode, QueryResult, RuvectorQuery, SubGraph};
 pub use replay::{DistributionStats, ReplayBuffer, ReplayEntry};
+pub use residual::ResidualGatBlock;
 pub use scheduler::{LearningRateScheduler, SchedulerType};
 pub use search::{cosine_similarity, differentiable_search, hierarchical_forward};
 pub use training::{

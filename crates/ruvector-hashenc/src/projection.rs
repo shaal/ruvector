@@ -43,11 +43,13 @@ impl Projection {
         }
     }
 
-    /// Fit projection rows from sample data when `cfg.projection == PcaInit`.
-    /// Uses covariance power-iteration with deflation to extract the top
-    /// `d_idx` principal directions. No-op for `LockedRandom`.
+    /// Fit projection rows from sample data when `cfg.projection` is `PcaInit`
+    /// or `Learned`. Uses covariance power-iteration with deflation to extract
+    /// the top `d_idx` principal directions. No-op for `LockedRandom`.
     pub fn fit(&mut self, cfg: &HashEncConfig, samples: &[Vec<f32>]) {
-        if cfg.projection != ProjectionKind::PcaInit || samples.is_empty() {
+        if !matches!(cfg.projection, ProjectionKind::PcaInit | ProjectionKind::Learned)
+            || samples.is_empty()
+        {
             return;
         }
         let d = self.input_dim;
@@ -120,5 +122,85 @@ impl Projection {
     #[inline]
     pub fn index_dims(&self) -> usize {
         self.index_dims
+    }
+
+    #[inline]
+    pub fn input_dim(&self) -> usize {
+        self.input_dim
+    }
+
+    #[inline]
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    /// Accumulate the projection-row gradient given `coord_grad = dL/d coord`
+    /// (length `index_dims`) and the post-logistic `coords` from the forward
+    /// pass. Chains through the logistic (`σ' = c(1-c)`) and the linear map.
+    pub fn accumulate_grad(&self, x: &[f32], coords: &[f32], coord_grad: &[f32], g: &mut ProjGrad) {
+        let n = self.input_dim.min(x.len());
+        for j in 0..self.index_dims {
+            let c = coords[j];
+            let dz = coord_grad[j] * c * (1.0 - c) * self.scale; // dL/dz_j
+            let rowg = &mut g.rows[j];
+            for i in 0..n {
+                rowg[i] += dz * x[i];
+            }
+        }
+    }
+
+    /// SGD step on the projection rows, then zero the accumulator.
+    pub fn apply_grad(&mut self, g: &mut ProjGrad, lr: f32) {
+        for j in 0..self.index_dims {
+            let row = &mut self.rows[j];
+            let gr = &mut g.rows[j];
+            for i in 0..row.len() {
+                row[i] -= lr * gr[i];
+                gr[i] = 0.0;
+            }
+        }
+    }
+
+    /// Perturb a single row entry (gradient-check tests / experimentation).
+    pub fn perturb(&mut self, j: usize, i: usize, delta: f32) {
+        self.rows[j][i] += delta;
+    }
+}
+
+/// Gradient accumulator for the projection rows (mirrors [`Projection`] shape).
+#[derive(Clone, Debug)]
+pub struct ProjGrad {
+    rows: Vec<Vec<f32>>,
+}
+
+impl ProjGrad {
+    pub fn new(proj: &Projection) -> Self {
+        Self {
+            rows: proj.rows.iter().map(|r| vec![0.0f32; r.len()]).collect(),
+        }
+    }
+
+    pub fn zero(&mut self) {
+        for r in &mut self.rows {
+            for v in r {
+                *v = 0.0;
+            }
+        }
+    }
+
+    /// Accumulated gradient value at projection entry `(j, i)`.
+    #[inline]
+    pub fn value(&self, j: usize, i: usize) -> f32 {
+        self.rows[j][i]
+    }
+
+    /// L2 norm of the accumulated gradient (diagnostics).
+    pub fn l2_norm(&self) -> f32 {
+        self.rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .map(|x| x * x)
+            .sum::<f32>()
+            .sqrt()
     }
 }

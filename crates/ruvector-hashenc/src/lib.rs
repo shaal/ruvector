@@ -35,12 +35,17 @@ mod hash;
 mod interp;
 mod projection;
 mod rng;
+pub mod sampling;
 mod tables;
+pub mod tiered;
 
 pub use config::{HashEncConfig, ProjectionKind};
 pub use interp::EncodeCache;
-pub use projection::Projection;
+pub use projection::{ProjGrad, Projection};
+pub use rng::SplitMix64;
+pub use sampling::{NegativeSampler, TemperatureSchedule};
 pub use tables::{FeatureTables, GradAccum};
+pub use tiered::{TieredFeatureStore, TierStats};
 
 use std::path::Path;
 
@@ -102,6 +107,22 @@ impl HashEncoder {
         &mut self.tables
     }
 
+    #[inline]
+    pub fn projection(&self) -> &Projection {
+        &self.projection
+    }
+
+    #[inline]
+    pub fn projection_mut(&mut self) -> &mut Projection {
+        &mut self.projection
+    }
+
+    /// True if the projection is configured to be trained (ADR-258 Phase 2).
+    #[inline]
+    pub fn projection_is_learned(&self) -> bool {
+        matches!(self.cfg.projection, ProjectionKind::Learned)
+    }
+
     /// Forward pass: returns `enc(x)` of length `L·F`.
     pub fn encode(&self, x: &[f32]) -> Vec<f32> {
         let mut cache = self.fresh_cache();
@@ -145,6 +166,34 @@ impl HashEncoder {
                 }
             }
         }
+    }
+
+    /// Backward pass for the **learned projection** (ADR-258 Phase 2): given
+    /// `grad_out` (length `L·F`), accumulate the gradient w.r.t. the projection
+    /// rows into `pgrad`. Re-derives coordinates and corners from `x`, so it can
+    /// be called independently of the table backward pass.
+    pub fn projection_grad(&self, x: &[f32], grad_out: &[f32], pgrad: &mut ProjGrad) {
+        let f = self.cfg.features_per_level;
+        let mut coords = vec![0.0f32; self.cfg.index_dims];
+        self.projection.apply(x, &mut coords);
+        let mut coord_grad = vec![0.0f32; self.cfg.index_dims];
+        for l in 0..self.cfg.levels {
+            let base = l * f;
+            interp::dlinear_coord_grad(
+                &self.tables,
+                l,
+                &coords,
+                &grad_out[base..base + f],
+                &mut coord_grad,
+            );
+        }
+        self.projection
+            .accumulate_grad(x, &coords, &coord_grad, pgrad);
+    }
+
+    /// Apply an SGD step to the projection rows.
+    pub fn apply_projection_grad(&mut self, pgrad: &mut ProjGrad, lr: f32) {
+        self.projection.apply_grad(pgrad, lr);
     }
 
     /// Persist tables to disk.

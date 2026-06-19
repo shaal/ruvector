@@ -14,6 +14,10 @@ pub enum ProjectionKind {
     /// Initialize projection rows from the top principal components of a sample.
     /// Concentrates multi-scale resolution along the highest-variance directions.
     PcaInit,
+    /// Trainable projection: PCA-initialized, then learned end-to-end alongside
+    /// the feature tables via [`crate::HashEncoder::projection_grad`] (ADR-258
+    /// Phase 2). Learns *which* directions deserve multi-scale resolution.
+    Learned,
 }
 
 /// Configuration for [`crate::HashEncoder`].

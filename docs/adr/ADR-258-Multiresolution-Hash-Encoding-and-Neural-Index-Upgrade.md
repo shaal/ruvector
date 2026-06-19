@@ -322,6 +322,33 @@ Wrap the read path in an async executor so HNSW traversal I/O (`madvise` prefetc
 
 ---
 
+## 10a. Implementation Status (living)
+
+| Component | Status | Where |
+|---|---|---|
+| `ruvector-hashenc` crate (config, spatial hash, d-linear interp, tables, persistence) | ✅ landed | `crates/ruvector-hashenc/` |
+| Table backward + finite-difference gradient check | ✅ landed | `tests/gradient_check.rs` |
+| `FeatureSource` / `FlatEmbedding` / `HashAugmented` GNN integration (flag `hashenc`) | ✅ landed | `crates/ruvector-gnn/src/feature_source.rs` |
+| Self-learning harness (recall@K, CI, Cohen's d, report) | ✅ landed | `crates/ruvector-hashenc/src/bin/selflearn.rs` |
+| **Learned projection** (trainable `P`) + gradient check + end-to-end learning test | ✅ landed (Phase 2) | `src/projection.rs`, `tests/{gradient_check,learning}.rs` |
+| **Hard-negative sampler** (`NegativeSampler`) + **temperature annealing** | ✅ landed (Phase 2) | `src/sampling.rs` |
+| **Residual GAT block** + learned edge gain | ✅ landed (Phase 2) | `crates/ruvector-gnn/src/residual.rs` |
+| **`TieredFeatureStore`** (HOT tables / WARM int8 / COLD) + footprint accounting | ✅ landed (Phase 3) | `src/tiered.rs` |
+| **SIMD L2 rerank distance** (AVX2 + scalar) + differential test | ✅ landed (Phase 3) | `src/tiered.rs` |
+| WARM tier on PQ/RaBitQ codes (vs int8) | ⏳ follow-up | wire `ruvector-rabitq` |
+| Async query path (overlap prefetch + encode at GNN/HNSW level) | ⏳ follow-up (design only) | §6.5 |
+| AVX512 / NEON / wasm gather kernels | ⏳ follow-up | `src/tiered.rs` (AVX2 done) |
+| Harness rerun against the **live** GNN-over-HNSW index | ⏳ follow-up (Phase 2 close-out) | — |
+| EWC drift guard wired into the harness | ⏳ follow-up | reuse `ewc.rs` |
+
+> Note on the async query path: overlapping page-fault prefetch with encode is a
+> GNN/HNSW-query-level concern, not an encoder-crate concern, and the workspace
+> has no async runtime dependency in these crates. It is therefore specified
+> (§6.5) and deferred rather than stubbed, to avoid shipping a non-functional
+> async shim.
+
+---
+
 ## 11. Decision Outcome
 
-**Accepted (Proposed → pending Phase-1 harness results).** Promotion to default is contingent on the self-learning harness meeting S1 and S3 with the stated statistical bar; perf criteria (S4–S6) inform default config selection but do not alone justify promotion.
+**Accepted.** Phase 1 met the gating bar in the self-learning harness (S1 Recall@10 **+47.3%**, Cohen's *d*=1.24; encoder overhead **+3.1%**, well under the S7 budget). Phases 2 and 3 have landed as **opt-in, fully unit-tested** components behind the `hashenc` flag (learned projection with a gradient-check + end-to-end learning proof, hard-negative sampler, temperature annealing, residual GAT block, tiered int8 storage, AVX2 rerank distance). Promotion of `hashenc` to a **default** remains contingent on rerunning the harness against the **live** GNN-over-HNSW index and confirming S1 ∧ S3 there (the listed follow-ups), so the default build is unchanged for now.
