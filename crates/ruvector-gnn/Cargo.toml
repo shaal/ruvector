@@ -13,6 +13,9 @@ description = "Graph Neural Network layer for Ruvector on HNSW topology"
 # Core
 ruvector-core = { version = "2.1.0", path = "../ruvector-core", default-features = false }
 
+# Multiresolution hash encoding (ADR-258) — optional, behind `hashenc` feature.
+ruvector-hashenc = { path = "../ruvector-hashenc", optional = true, default-features = false, features = ["std"] }
+
 # Math and numerics
 ndarray = { version = "0.17.2", features = ["serde"] }
 rand = { workspace = true }
@@ -50,6 +53,7 @@ wasm = []
 napi = ["dep:napi", "dep:napi-derive"]
 mmap = ["dep:memmap2", "dep:page_size"]
 cold-tier = ["mmap"]  # Hyperbatch training for graphs exceeding RAM
+hashenc = ["dep:ruvector-hashenc"]  # ADR-258: multiresolution hash-encoded node features
 
 [dev-dependencies]
 criterion = { workspace = true }

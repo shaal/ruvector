@@ -1,0 +1,32 @@
+[package]
+name = "ruvector-hashenc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Multiresolution hash encoding (Instant-NGP style) of trainable multi-scale features for RuVector's neural index (ADR-258)"
+
+[dependencies]
+thiserror = { workspace = true }
+memmap2 = { workspace = true, optional = true }
+
+[features]
+default = ["std"]
+std = []
+# Memory-mapped, persistent feature tables (non-WASM). Falls back to in-memory.
+mmap = ["dep:memmap2"]
+# SIMD gather/interpolation kernels (scalar reference is always available).
+simd = []
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bin]]
+name = "ruvector-selflearn"
+path = "src/bin/selflearn.rs"
+
+[[bench]]
+name = "encode"
+harness = false

@@ -50,10 +50,12 @@
 pub mod compress;
 pub mod error;
 pub mod ewc;
+pub mod feature_source;
 pub mod graphmae;
 pub mod layer;
 pub mod query;
 pub mod replay;
+pub mod residual;
 pub mod scheduler;
 pub mod search;
 pub mod tensor;
@@ -69,6 +71,9 @@ pub mod cold_tier;
 pub use compress::{CompressedTensor, CompressionLevel, TensorCompress};
 pub use error::{GnnError, Result};
 pub use ewc::ElasticWeightConsolidation;
+pub use feature_source::{FeatureSource, FlatEmbedding};
+#[cfg(feature = "hashenc")]
+pub use feature_source::HashAugmented;
 pub use graphmae::{
     mse_loss, sce_loss, FeatureMasking, GATEncoder, GraphData, GraphMAE, GraphMAEConfig,
     GraphMAEDecoder, LossFn, MaskResult,
@@ -76,6 +81,7 @@ pub use graphmae::{
 pub use layer::RuvectorLayer;
 pub use query::{QueryMode, QueryResult, RuvectorQuery, SubGraph};
 pub use replay::{DistributionStats, ReplayBuffer, ReplayEntry};
+pub use residual::ResidualGatBlock;
 pub use scheduler::{LearningRateScheduler, SchedulerType};
 pub use search::{cosine_similarity, differentiable_search, hierarchical_forward};
 pub use training::{
