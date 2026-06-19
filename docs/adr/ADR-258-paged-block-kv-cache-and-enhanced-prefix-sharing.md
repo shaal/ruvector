@@ -244,7 +244,7 @@ Implemented in `crates/ruvllm/src/paged_kv/` (module `ruvllm::paged_kv`):
 | 3 — Quantization layering | ✅ Done | `quant.rs` (`QuantTier`, `BlockQuantizer`, `Identity`/`Uniform`), `cache.rs::demote_cold_blocks` |
 | 4 — Continuous batching | ✅ Done | `scheduler.rs` (`BatchScheduler`: admit/preempt/finish, block-budget + watermark, recompute preemption) |
 | 5 — Tests & micro-benchmarks | ✅ Done | 34 unit/`proptest` tests; `benches/paged_kv_bench.rs` (alloc/append/prefix/fork/gather) |
-| 6 — Full integration & e2e | ◑ In progress | `attention.rs` (`BlockAttention` trait, `CpuPagedAttention` streaming-softmax kernel verified vs. dense); `serving/paged_kv_manager.rs` (`PagedKvCacheManager` request-keyed adapter behind the `paged-kv` feature flag, prefix-aware admit/extend/free + attention); `benches/paged_kv_bench.rs::serving_high_sharing` (e2e admission throughput). Remaining: engine swap-in to drive the continuous-batching loop, GPU kernels, throughput/TTFT comparison vs. the contiguous baseline. |
+| 6 — Full integration & e2e | ◑ In progress | `attention.rs` (`BlockAttention` trait, `CpuPagedAttention` streaming-softmax kernel verified vs. dense); `serving/paged_kv_manager.rs` (`PagedKvCacheManager` request-keyed adapter, bidirectional Request↔Seq mapping, prefix-aware admit/extend/free + attention); `serving/paged_engine.rs` (`PagedBatchEngine` — a real continuous-batching loop over the paged stack: admission/prefill, per-step decode via a model-agnostic `TokenGenerator`, recompute-policy preemption, completion); `benches/paged_kv_bench.rs::serving_high_sharing`. All behind the `paged-kv` feature. Remaining: drive the production `candle` model decode through `PagedBatchEngine`, GPU paged-attention kernels, real-model throughput/TTFT A/B vs. the contiguous baseline. |
 
 The CPU paged-attention kernel uses a FlashAttention-style online softmax that
 streams over blocks (`O(num_heads · head_dim)` memory), which is the exact access
@@ -283,3 +283,4 @@ changes.
 | 1.0 | 2026-06-18 | RuVector Architecture Team | Initial proposal |
 | 1.1 | 2026-06-18 | RuVector Architecture Team | Add Implementation Status; Phases 1–5 done, Phase 6 substrate (`BlockAttention` kernel) + Phase 4 scheduler landed |
 | 1.2 | 2026-06-18 | RuVector Architecture Team | Phase 6 serving integration: `PagedKvCacheManager` behind `paged-kv` feature + high-sharing e2e benchmark |
+| 1.3 | 2026-06-18 | RuVector Architecture Team | Phase 6 engine swap-in: `PagedBatchEngine` continuous-batching loop over the paged stack (admission/decode/preemption/completion) |

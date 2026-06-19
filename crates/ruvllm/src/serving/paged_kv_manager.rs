@@ -30,9 +30,35 @@ use std::sync::Arc;
 pub struct PagedKvCacheManager {
     cache: Arc<PagedKvCache>,
     scheduler: Mutex<BatchScheduler>,
-    /// RequestId (UUID) → dense SeqId used by the cache/scheduler.
-    seq_map: Mutex<HashMap<RequestId, SeqId>>,
+    /// Bidirectional RequestId (UUID) ↔ dense SeqId mapping. Both directions are
+    /// kept in step so the serving layer can translate scheduler preemptions
+    /// (reported as `SeqId`) back to `RequestId`.
+    seq_map: Mutex<SeqMap>,
     next_seq: AtomicU64,
+}
+
+/// Bidirectional request↔seq mapping.
+#[derive(Default)]
+struct SeqMap {
+    fwd: HashMap<RequestId, SeqId>,
+    rev: HashMap<SeqId, RequestId>,
+}
+
+impl SeqMap {
+    fn insert(&mut self, req: RequestId, seq: SeqId) {
+        self.fwd.insert(req, seq);
+        self.rev.insert(seq, req);
+    }
+    fn remove_req(&mut self, req: RequestId) -> Option<SeqId> {
+        let seq = self.fwd.remove(&req)?;
+        self.rev.remove(&seq);
+        Some(seq)
+    }
+    fn remove_seq(&mut self, seq: SeqId) -> Option<RequestId> {
+        let req = self.rev.remove(&seq)?;
+        self.fwd.remove(&req);
+        Some(req)
+    }
 }
 
 impl PagedKvCacheManager {
@@ -43,7 +69,7 @@ impl PagedKvCacheManager {
         Self {
             cache,
             scheduler: Mutex::new(scheduler),
-            seq_map: Mutex::new(HashMap::new()),
+            seq_map: Mutex::new(SeqMap::default()),
             next_seq: AtomicU64::new(1),
         }
     }
@@ -56,16 +82,34 @@ impl PagedKvCacheManager {
     /// Resolve (or assign) the dense `SeqId` for a request.
     fn seq_for(&self, req: RequestId) -> SeqId {
         let mut map = self.seq_map.lock();
-        *map.entry(req)
-            .or_insert_with(|| self.next_seq.fetch_add(1, Ordering::Relaxed))
+        if let Some(&seq) = map.fwd.get(&req) {
+            return seq;
+        }
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+        map.insert(req, seq);
+        seq
     }
 
     fn existing_seq(&self, req: RequestId) -> Result<SeqId> {
         self.seq_map
             .lock()
+            .fwd
             .get(&req)
             .copied()
             .ok_or_else(|| RuvLLMError::NotFound(format!("request {req} not allocated")))
+    }
+
+    /// Translate a `SeqId` (e.g. a scheduler preemption victim) back to its
+    /// `RequestId`, if still mapped.
+    pub fn request_for_seq(&self, seq: SeqId) -> Option<RequestId> {
+        self.seq_map.lock().rev.get(&seq).copied()
+    }
+
+    /// Clear the mapping for a sequence the scheduler already preempted (its
+    /// blocks are freed by the preemption path, so this must **not** re-free).
+    /// Returns the `RequestId` that owned it.
+    pub fn forget_preempted_seq(&self, seq: SeqId) -> Option<RequestId> {
+        self.seq_map.lock().remove_seq(seq)
     }
 
     /// Admit and prefill a request's prompt, sharing the longest cached prefix.
@@ -111,7 +155,7 @@ impl PagedKvCacheManager {
 
     /// Logical→physical block table (physical block ids) for a request.
     pub fn block_table(&self, req: RequestId) -> Option<Vec<u32>> {
-        let seq = self.seq_map.lock().get(&req).copied()?;
+        let seq = self.seq_map.lock().fwd.get(&req).copied()?;
         self.cache
             .block_table(seq)
             .map(|t| t.blocks().iter().map(|b| b.0).collect())
@@ -132,10 +176,7 @@ impl PagedKvCacheManager {
     /// Free a request, retiring it from the scheduler and releasing its blocks
     /// (shared prefix blocks survive for other requests).
     pub fn free(&self, req: RequestId) -> Result<()> {
-        let seq = {
-            let mut map = self.seq_map.lock();
-            map.remove(&req)
-        };
+        let seq = self.seq_map.lock().remove_req(req);
         if let Some(seq) = seq {
             self.scheduler.lock().finish(seq)?;
         }
@@ -152,7 +193,7 @@ impl PagedKvCacheManager {
         PagedKvManagerStats {
             cache: self.cache.stats(),
             scheduler: self.scheduler.lock().stats(),
-            tracked_requests: self.seq_map.lock().len(),
+            tracked_requests: self.seq_map.lock().fwd.len(),
         }
     }
 }
