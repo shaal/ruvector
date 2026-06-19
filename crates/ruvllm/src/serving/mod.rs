@@ -126,6 +126,9 @@
 pub mod batch;
 pub mod engine;
 pub mod kv_cache_manager;
+// ADR-258 Phase 6: opt-in paged KV cache serving adapter.
+#[cfg(feature = "paged-kv")]
+pub mod paged_kv_manager;
 pub mod request;
 pub mod scheduler;
 
@@ -137,6 +140,8 @@ pub use engine::{GenerationResult, ServingEngine, ServingEngineConfig, ServingMe
 pub use kv_cache_manager::{
     KvCacheAllocation, KvCacheManager, KvCacheManagerStats, KvCachePoolConfig,
 };
+#[cfg(feature = "paged-kv")]
+pub use paged_kv_manager::{PagedKvCacheManager, PagedKvManagerStats};
 pub use request::{
     CompletedRequest, FinishReason, InferenceRequest, Priority, RequestId, RequestState,
     RunningRequest, TokenOutput,

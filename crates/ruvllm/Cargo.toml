@@ -125,6 +125,12 @@ wasm-simd = []
 # Quantization support (requires platform-specific SIMD)
 quantize = []
 
+# ADR-258: opt-in paged block-based KV cache serving adapter
+# (serving::paged_kv_manager). The core `paged_kv` module is always compiled;
+# this flag only gates the serving-layer integration so the existing slot-based
+# KvCacheManager path is unaffected by default.
+paged-kv = []
+
 # P5 Optimization: Optional routing metrics collection
 # Disable for production to avoid Instant::now() syscall overhead (~0.04-0.08µs)
 routing-metrics = []

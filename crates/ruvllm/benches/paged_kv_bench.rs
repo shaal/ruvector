@@ -11,7 +11,8 @@
 //!   --bench paged_kv_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use ruvllm::paged_kv::{PagedKvCache, PagedKvConfig};
+use ruvllm::paged_kv::{BatchScheduler, PagedKvCache, PagedKvConfig, SchedulerConfig};
+use std::sync::Arc;
 
 fn config() -> PagedKvConfig {
     PagedKvConfig {
@@ -139,12 +140,59 @@ fn bench_gather(c: &mut Criterion) {
     group.finish();
 }
 
+/// End-to-end serving workload: admit a wave of agent requests that all share a
+/// long system-prompt prefix, then retire them. This is the high-sharing
+/// scenario the ADR targets — admission cost is dominated by block-aligned
+/// prefix reuse (zero KV recompute for the shared 512 tokens), and the pool only
+/// allocates one suffix block per request rather than a full contiguous context.
+fn bench_serving_high_sharing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("paged_kv/serving_high_sharing");
+    let cfg = config();
+    let stride = cfg.token_stride();
+    let prefix_len = 512; // shared system prompt + tool schema
+    let suffix_len = 16; // per-request unique turn
+    for &wave in &[16usize, 64] {
+        group.throughput(Throughput::Elements(wave as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(wave), &wave, |b, _| {
+            b.iter_batched(
+                || {
+                    let cache = Arc::new(PagedKvCache::new(cfg.clone()));
+                    let sched = BatchScheduler::new(cache.clone(), SchedulerConfig::default());
+                    // Warm the prefix index with one seed sequence.
+                    let ptoks: Vec<u32> = (0..prefix_len as u32).collect();
+                    let pk = vec![0.5f32; prefix_len * stride];
+                    let pv = vec![0.25f32; prefix_len * stride];
+                    cache.allocate_sequence(0).unwrap();
+                    cache.append(0, &ptoks, &pk, &pv).unwrap();
+                    (cache, sched, ptoks)
+                },
+                |(cache, mut sched, ptoks)| {
+                    for r in 1..=wave as u64 {
+                        // Same 512-token prefix, unique suffix per request.
+                        let mut toks = ptoks.clone();
+                        toks.extend((0..suffix_len as u32).map(|i| 1_000_000 + r as u32 * 100 + i));
+                        let n = toks.len();
+                        let k = vec![0.5f32; n * stride];
+                        let v = vec![0.25f32; n * stride];
+                        let out = sched.admit(r, &toks, &k, &v).unwrap();
+                        black_box(&out);
+                    }
+                    black_box(cache.stats());
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_allocate_free,
     bench_append_scaling,
     bench_prefix_sharing,
     bench_fork_cow,
-    bench_gather
+    bench_gather,
+    bench_serving_high_sharing
 );
 criterion_main!(benches);
