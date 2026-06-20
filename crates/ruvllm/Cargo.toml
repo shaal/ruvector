@@ -287,6 +287,12 @@ name = "run_eval"
 path = "examples/run_eval.rs"
 required-features = ["async-runtime"]
 
+# ADR-258: paged KV cache end-to-end engine demo.
+[[example]]
+name = "paged_engine_demo"
+path = "examples/paged_engine_demo.rs"
+required-features = ["paged-kv"]
+
 # Lint configuration for the package
 [lints.clippy]
 # Allow common patterns in test code for readability

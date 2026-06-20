@@ -252,6 +252,34 @@ pattern the GPU backends (FA-3 / Metal / cudarc) will implement behind the same
 `BlockAttention` trait — so Phase 6 hardware kernels drop in without allocator
 changes.
 
+### Runnable demo
+
+`examples/paged_engine_demo.rs` (feature `paged-kv`) drives `PagedBatchEngine`
+through a 64-request agent wave sharing a 512-token system prompt:
+
+```bash
+cargo run -p ruvllm --no-default-features --features minimal,paged-kv \
+  --example paged_engine_demo
+```
+
+Representative output: 63/64 requests reuse the cached prompt (32,256 prefix
+tokens shared), **peak 224 blocks vs. 2,176 for a contiguous baseline — 89.7%
+fewer blocks at peak** — with the pool fully reclaimed at drain (no leaks). This
+exercises the complete allocate → share → CoW → preempt → free path.
+
+### Real-model wiring: the candle KV seam
+
+The engine is model-agnostic via the `TokenGenerator` trait; a production
+generator backs onto the model decode step and `PagedKvCacheManager::attention`.
+A faithful real-model path is currently **blocked upstream**: `candle-transformers`
+models own their KV cache internally and the `LlmBackend` trait exposes only
+text/token generation (`generate`/`generate_stream`/`embed`), not the per-layer
+K/V projections the paged pool needs to store. Closing this requires either a
+custom attention layer that externalizes K/V (cf. the hand-rolled
+`backends/gemma2.rs` which already threads `kv_cache: (&mut Vec<f32>, &mut Vec<f32>)`)
+or an upstream hook — tracked as the remaining Phase 6 work alongside GPU
+kernels and a real-model throughput/TTFT A/B.
+
 ---
 
 ## References
@@ -284,3 +312,4 @@ changes.
 | 1.1 | 2026-06-18 | RuVector Architecture Team | Add Implementation Status; Phases 1–5 done, Phase 6 substrate (`BlockAttention` kernel) + Phase 4 scheduler landed |
 | 1.2 | 2026-06-18 | RuVector Architecture Team | Phase 6 serving integration: `PagedKvCacheManager` behind `paged-kv` feature + high-sharing e2e benchmark |
 | 1.3 | 2026-06-18 | RuVector Architecture Team | Phase 6 engine swap-in: `PagedBatchEngine` continuous-batching loop over the paged stack (admission/decode/preemption/completion) |
+| 1.4 | 2026-06-18 | RuVector Architecture Team | Add runnable `paged_engine_demo` (89.7% fewer blocks at peak); document the candle KV-externalization seam blocking the real-model path |
